@@ -34,6 +34,7 @@ THEMES = {
     },
 }
 
+# key, label, min, max, step, rebuild-audio-on-change
 RUMBLE_PARAMS = [
     ("gate", "Silence gate", 0.0, 0.30, 0.005, False),
     ("impact_level", "Impact level (full rumble)", 0.20, 1.00, 0.01, False),
@@ -86,6 +87,7 @@ class ControlPanel(ctk.CTk):
         self._build_all()
         self.after(150, self._tick)
 
+    # ---- build / rebuild ----
     def _build_all(self):
         self._knobs = {}
         self._build_header()
@@ -104,6 +106,7 @@ class ControlPanel(ctk.CTk):
         return ctk.CTkFrame(parent, fg_color=self.pal["card"], corner_radius=22,
                             border_width=1, border_color=self.pal["edge"])
 
+    # ---- header ----
     def _build_header(self):
         p = self.pal
         self._header = self._card(self)
@@ -145,6 +148,7 @@ class ControlPanel(ctk.CTk):
         self.meter_r.set(0)
         self.meter_r.pack(side="left", fill="x", expand=True, padx=(4, 0))
 
+    # ---- tabs ----
     def _build_tabs(self):
         p = self.pal
         self._tabsw = ctk.CTkTabview(self, fg_color=p["card"], segmented_button_fg_color=p["sunk"],
@@ -219,6 +223,7 @@ class ControlPanel(ctk.CTk):
             if val is not None:
                 knob.set(val)
 
+    # ---- profile bar ----
     def _build_profile_bar(self):
         p = self.pal
         self._profile_card = self._card(self)
@@ -241,6 +246,7 @@ class ControlPanel(ctk.CTk):
                       fg_color=p["accent"], hover_color=p["accent_dark"]).pack(side="right")
         self._refresh_profiles()
 
+    # ---- state plumbing ----
     def _set(self, section, key, value, rebuild=False):
         self.state_obj.config[section][key] = value
         if rebuild:
@@ -296,6 +302,7 @@ class ControlPanel(ctk.CTk):
         self.trackpad_on.set(st.trackpad_enabled)
         self.after(120, self._tick)
 
+    # ---- profiles ----
     def _refresh_profiles(self):
         names = sorted(os.path.splitext(f)[0] for f in os.listdir(paths.profiles_dir())
                        if f.endswith(".json"))
