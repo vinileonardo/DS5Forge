@@ -1,29 +1,53 @@
-import threading
+"""Legacy state projection; hardware ownership moved to ``CoreFacade``."""
+
+from __future__ import annotations
+
+from typing import Any
 
 
 class AppState:
-    """Runtime state shared between the controller engines and the UI."""
+    """Read-only compatibility projection for integrations using the baseline.
 
-    def __init__(self, config):
-        self.config = config
-        self.rumble_enabled = True
-        self.trackpad_enabled = config["trackpad"].get("trackpad_enabled_on_start", True)
+    It deliberately does not expose ``ds`` or mutable controller state. New
+    code should use ``CoreFacade.snapshot()`` and its command methods.
+    """
 
-        self.controller_connected = False
-        self.listening_on = ""
-        self.battery = 0
-        self.motor_left = 0
-        self.motor_right = 0
+    def __init__(self, facade: Any) -> None:
+        if not hasattr(facade, "snapshot"):
+            raise TypeError("AppState requires a CoreFacade")
+        self.facade = facade
 
-        self.ds = None
-        self.reload_audio = threading.Event()
+    @property
+    def config(self) -> dict[str, Any]:
+        return self.facade.config()
 
-    def toggle(self, target):
-        if target == "rumble":
-            self.rumble_enabled = not self.rumble_enabled
-        elif target == "trackpad":
-            self.trackpad_enabled = not self.trackpad_enabled
-        else:  # master: flip both to a single shared state
-            new_state = not (self.rumble_enabled or self.trackpad_enabled)
-            self.rumble_enabled = new_state
-            self.trackpad_enabled = new_state
+    @property
+    def rumble_enabled(self) -> bool:
+        return self.facade.snapshot().rumble_enabled
+
+    @property
+    def trackpad_enabled(self) -> bool:
+        return self.facade.snapshot().touchpad_enabled
+
+    @property
+    def controller_connected(self) -> bool:
+        return self.facade.snapshot().connection.value == "connected"
+
+    @property
+    def battery(self) -> int:
+        return self.facade.snapshot().battery.level
+
+    @property
+    def motor_left(self) -> int:
+        return self.facade.snapshot().motors.left
+
+    @property
+    def motor_right(self) -> int:
+        return self.facade.snapshot().motors.right
+
+    @property
+    def listening_on(self) -> str:
+        return self.facade.snapshot().audio.device or ""
+
+    def toggle(self, target: str) -> None:
+        self.facade.toggle(target)

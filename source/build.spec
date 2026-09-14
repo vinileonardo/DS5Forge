@@ -7,7 +7,7 @@ CONSOLE = os.environ.get("DSC_CONSOLE") == "1"
 
 datas = []
 binaries = []
-hiddenimports = ["cffi", "_cffi_backend"]
+hiddenimports = ["cffi", "_cffi_backend", "fastapi", "uvicorn", "pydantic"]
 
 # Bundle the app's resources (default config + starter profiles).
 res_root = os.path.join(SPECPATH, "dualsense_companion", "resources")
@@ -22,7 +22,7 @@ for root, _dirs, files in os.walk(res_root):
 binaries.append((os.path.join(SITE, "pydualsense", "hidapi.dll"), "."))
 
 # customtkinter ships theme/asset files that must travel with the app.
-for pkg in ("customtkinter",):
+for pkg in ("customtkinter", "fastapi", "uvicorn"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b

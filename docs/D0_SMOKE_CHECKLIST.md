@@ -80,3 +80,13 @@ Registrar no review D0/P0:
 ## Gate
 
 P0 não deve alegar regressão zero do baseline sem este checklist ou testes automatizados equivalentes para o comportamento alterado.
+
+## Registro P0
+
+- [x] gates automatizados registrados em `docs/P0_VALIDATION.md`;
+- [x] API `/api/v1/health`, `/state`, config e comandos testados em loopback;
+- [x] WebSocket recebe snapshot inicial e evento de mudança;
+- [x] nenhuma referência de hardware é exposta pela GUI/API;
+- [x] shutdown deixa threads, motores e botões sintéticos em estado neutro nos testes automatizados/fakes;
+- [x] Windows + DualSense USB físico permanece explicitamente como `HARDWARE VALIDATION PENDING`;
+- [x] auditoria de código confirma que P0 não adicionou Bluetooth/wireless.

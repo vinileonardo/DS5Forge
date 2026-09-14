@@ -1,0 +1,32 @@
+name: DS5Forge checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux-static-and-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: ruff format --check source tests
+      - run: ruff check source tests
+      - run: mypy source/dualsense_companion
+      - run: pytest
+
+  windows-import-and-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements-dev.txt pyinstaller
+      - run: python -m compileall -q source
+      - run: python -m PyInstaller source/build.spec --distpath source/dist --workpath source/build_tmp --noconfirm
+        env:
+          DSC_CONSOLE: "1"

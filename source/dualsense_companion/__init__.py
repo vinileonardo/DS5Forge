@@ -1,6 +1,7 @@
 """DualSense Companion — audio-driven rumble and touchpad mouse for PC."""
 
 import ctypes
+import logging
 import os
 import sys
 
@@ -14,5 +15,6 @@ if getattr(sys, "frozen", False):
     if os.path.exists(_dll):
         try:
             ctypes.CDLL(_dll)
-        except OSError:
-            pass
+        except OSError as exc:
+            # PyInstaller can still resolve the DLL by its bundled path.
+            logging.getLogger(__name__).debug("optional hidapi preload failed: %s", exc)

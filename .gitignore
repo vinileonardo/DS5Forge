@@ -1,16 +1,13 @@
-# Python
 __pycache__/
 *.py[cod]
-*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 .venv/
-venv/
-
-# PyInstaller build output
+build/
+dist/
 source/build_tmp/
 source/dist/
-source/dist_console/
-*.spec.bak
-
-# OS
-Thumbs.db
-Desktop.ini
+*.egg-info/

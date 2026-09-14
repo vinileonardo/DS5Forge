@@ -1,0 +1,87 @@
+"""Typed errors crossing the core, API and platform boundaries."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .models import ErrorSnapshot
+
+
+class ErrorCode(StrEnum):
+    CONFIG_INVALID = "config.invalid"
+    CONFIG_LOAD_FAILED = "config.load_failed"
+    CONFIG_SAVE_FAILED = "config.save_failed"
+    PROFILE_INVALID = "profile.invalid"
+    PROFILE_NOT_FOUND = "profile.not_found"
+    CONTROLLER_UNAVAILABLE = "controller.unavailable"
+    CONTROLLER_CONNECT_FAILED = "controller.connect_failed"
+    CONTROLLER_READ_FAILED = "controller.read_failed"
+    CONTROLLER_OUTPUT_FAILED = "controller.output_failed"
+    AUDIO_UNAVAILABLE = "audio.unavailable"
+    AUDIO_CAPTURE_FAILED = "audio.capture_failed"
+    POINTER_OUTPUT_FAILED = "pointer.output_failed"
+    PLATFORM_UNAVAILABLE = "platform.unavailable"
+    API_VALIDATION = "api.validation"
+    INTERNAL = "internal.error"
+
+
+class DS5ForgeError(Exception):
+    """An expected operational error with a stable code and safe message."""
+
+    def __init__(
+        self,
+        code: ErrorCode,
+        message: str,
+        *,
+        detail: str | None = None,
+        recoverable: bool = True,
+        fields: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.detail = detail
+        self.recoverable = recoverable
+        self.fields = dict(fields or {})
+
+    def to_snapshot(self) -> ErrorSnapshot:
+        # Imported lazily to keep this module usable during model bootstrap.
+        from .models import ErrorSnapshot
+
+        return ErrorSnapshot(
+            code=self.code,
+            message=self.message,
+            detail=self.detail,
+            recoverable=self.recoverable,
+            fields=self.fields,
+        )
+
+
+class ConfigValidationError(DS5ForgeError):
+    def __init__(
+        self,
+        message: str = "Configuration is invalid.",
+        *,
+        fields: Mapping[str, Any] | None = None,
+        detail: str | None = None,
+    ) -> None:
+        super().__init__(
+            ErrorCode.CONFIG_INVALID,
+            message,
+            detail=detail,
+            recoverable=True,
+            fields=fields,
+        )
+
+
+class ControllerUnavailableError(DS5ForgeError):
+    def __init__(self, message: str = "No USB controller is available.", *, detail: str | None = None) -> None:
+        super().__init__(ErrorCode.CONTROLLER_UNAVAILABLE, message, detail=detail, recoverable=True)
+
+
+class PlatformUnavailableError(DS5ForgeError):
+    def __init__(self, message: str, *, detail: str | None = None) -> None:
+        super().__init__(ErrorCode.PLATFORM_UNAVAILABLE, message, detail=detail, recoverable=True)
