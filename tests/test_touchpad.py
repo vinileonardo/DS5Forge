@@ -69,6 +69,26 @@ class TouchpadTests(unittest.TestCase):
         actions = interpreter.reset_state()
         self.assertIn(("button", True, False), [(a.kind, a.left, a.down) for a in actions])
 
+    def test_disabling_gesture_interpretation_releases_touchpad_click(self):
+        interpreter = GestureInterpreter()
+        pressed = interpreter.process(ControllerInput(touchpad_button=True), self.config, now=0.0)
+        self.assertIn((True, True), [(action.left, action.down) for action in pressed.actions])
+
+        disabled_config = {**self.config, "gestures_enabled": False}
+        released = interpreter.process(ControllerInput(touchpad_button=True), disabled_config, now=0.02)
+        self.assertIn((True, False), [(action.left, action.down) for action in released.actions])
+        self.assertFalse(interpreter.prev_pad_click)
+
+    def test_disabling_swipe_keeps_tap_to_click(self):
+        interpreter = GestureInterpreter()
+        config = {**self.config, "swipe_enabled": False, "tap_to_click": True}
+        interpreter.process(ControllerInput(touch0=TouchPoint(True, 100, 100)), config, now=0.0)
+        released = interpreter.process(ControllerInput(), config, now=0.1)
+        self.assertIn(
+            (True, False),
+            [(action.left, action.down) for action in released.actions if action.kind == "button"],
+        )
+
     def test_service_reset_calls_output_release(self):
         output = FakeMouse()
         service = TouchpadService(output, lambda: self.config)

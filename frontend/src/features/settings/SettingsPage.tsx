@@ -27,22 +27,24 @@ const micBehaviors: Array<{ value: Config["mic_button"]; label: string; help: st
   },
 ];
 
+type SettingsDraft = Pick<Config, "theme" | "mic_button">;
+
 export function SettingsPage() {
   const { config, coreStatus, updateConfig } = useRuntime();
-  const [theme, setTheme] = useState<Config["theme"]>(config?.theme ?? "Dark");
-  const [micButton, setMicButton] = useState<Config["mic_button"]>(config?.mic_button ?? "master");
+  const [draft, setDraft] = useState<SettingsDraft | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
 
-  useEffect(() => {
-    if (config) {
-      setTheme(config.theme);
-      setMicButton(config.mic_button);
-    }
-  }, [config]);
+  const dirty = Boolean(
+    config && draft && (config.theme !== draft.theme || config.mic_button !== draft.mic_button),
+  );
 
-  if (!config) {
+  useEffect(() => {
+    if (config && !dirty) setDraft({ theme: config.theme, mic_button: config.mic_button });
+  }, [config, dirty]);
+
+  if (!config || !draft) {
     return coreStatus === "online" ? (
       <LoadingState label="Waiting for persisted settings from the local core…" />
     ) : (
@@ -59,14 +61,18 @@ export function SettingsPage() {
       </>
     );
   }
+  const currentDraft = draft;
 
-  const dirty = theme !== config.theme || micButton !== config.mic_button;
   async function save() {
     setSaving(true);
     setMessage(null);
     setError(null);
     try {
-      await updateConfig({ theme, mic_button: micButton });
+      const saved = await updateConfig({
+        theme: currentDraft.theme,
+        mic_button: currentDraft.mic_button,
+      });
+      setDraft({ theme: saved.theme, mic_button: saved.mic_button });
       setMessage("Settings saved.");
     } catch (reason) {
       setError(reason);
@@ -109,9 +115,13 @@ export function SettingsPage() {
           <Field label="Theme" help="Liquid Glass remains available when it is present in the core contract.">
             <Select
               aria-label="Theme"
-              value={theme}
+              value={currentDraft.theme}
               disabled={coreStatus !== "online" || saving}
-              onChange={(event) => setTheme(event.target.value as Config["theme"])}
+              onChange={(event) =>
+                setDraft((current) =>
+                  current ? { ...current, theme: event.target.value as Config["theme"] } : current,
+                )
+              }
             >
               {themes.map((item) => (
                 <option key={item} value={item}>
@@ -129,12 +139,19 @@ export function SettingsPage() {
             </div>
             <MonitorCog size={18} color="var(--violet)" />
           </div>
-          <Field label="Button action" help={micBehaviors.find((item) => item.value === micButton)?.help}>
+          <Field
+            label="Button action"
+            help={micBehaviors.find((item) => item.value === currentDraft.mic_button)?.help}
+          >
             <Select
               aria-label="Microphone button behavior"
-              value={micButton}
+              value={currentDraft.mic_button}
               disabled={coreStatus !== "online" || saving}
-              onChange={(event) => setMicButton(event.target.value as Config["mic_button"])}
+              onChange={(event) =>
+                setDraft((current) =>
+                  current ? { ...current, mic_button: event.target.value as Config["mic_button"] } : current,
+                )
+              }
             >
               {micBehaviors.map((item) => (
                 <option key={item.value} value={item.value}>

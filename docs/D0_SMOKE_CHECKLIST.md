@@ -105,3 +105,29 @@ física Windows + DualSense USB acima.
 - [ ] confirmar que o preview do frontend e o Tauri usam a mesma SPA;
 - [ ] confirmar que origins remotas, wildcard CORS e bind externo são rejeitados;
 - [ ] confirmar que nenhum recurso P2/P3/P4 ou Bluetooth/wireless aparece como caminho ativo.
+
+## Registro P2 — Controller Lab
+
+Estas verificações cobrem a extensão Controller Lab e continuam exigindo um
+DualSense real conectado por cabo USB. Testes automatizados/frontend devem ser
+registrados separadamente em `docs/P2_VALIDATION.md`.
+
+- [ ] abrir `/controller` e confirmar as abas Input, Triggers, Lighting e Sticks;
+- [ ] Input mostra botões, D-pad, L2/R2, dois sticks e pontos de toque sem expor objeto Windows;
+- [ ] desconectar durante a tela mostra estado stale/offline e desabilita comandos de saída;
+- [ ] reconectar atualiza snapshot sem reload e inicia com motores/gatilhos em estado neutro;
+- [ ] aplicar/resetar lightbar funciona quando a capability é reportada;
+- [ ] trigger preview expira e reseta ambos os gatilhos para Off;
+- [ ] cancelar preview, desconectar e fechar o app também reseta os gatilhos;
+- [ ] haptics test respeita duração máxima, bloqueia duplicata e termina com motores zerados;
+- [ ] ajustar gestos/pontos do touchpad preserva release de botões sintéticos no teardown;
+- [ ] salvar/exportar/importar perfil v2 funciona; overwrite exige confirmação;
+- [ ] perfil bundled continua read-only e capability ausente aparece como motivo explícito;
+- [ ] deadzone/calibration é apresentado como metadata de visualização DS5Forge, sem alterar input nativo do jogo.
+
+## Gate P2
+
+- [x] gates automatizados e limitações registrados em `docs/P2_VALIDATION.md`;
+- [x] auditoria de fronteira confirma que a UI não importa `pydualsense`, WASAPI ou APIs HID;
+- [x] auditoria USB-only confirma que P2 não adicionou Bluetooth, pairing ou transporte wireless;
+- [ ] Windows + DualSense USB físico: permanece `HARDWARE VALIDATION PENDING` até evidência real ser anexada.

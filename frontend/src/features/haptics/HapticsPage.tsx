@@ -11,11 +11,13 @@ import {
   Notice,
   NumberInput,
   PageHeader,
+  StatusPill,
   Toggle,
 } from "../../components/ui";
 import { RUMBLE_FIELD_SPECS, type RumbleConfig } from "../../lib/api/contracts";
 import { ApiError, errorMessage, fieldErrorMap } from "../../lib/api/errors";
 import { useRuntime } from "../../lib/runtime/RuntimeProvider";
+import { capabilityEnabled, capabilityReason } from "../controller/visualizers";
 
 const groupOrder = [
   "Frequency response",
@@ -33,25 +35,39 @@ function groupFields() {
 }
 
 export function HapticsPage() {
-  const { config, runtime, coreStatus, stale, canControl, updateConfig, setRumble, testRumble } =
-    useRuntime();
+  const {
+    config,
+    runtime,
+    coreStatus,
+    stale,
+    canControl,
+    updateConfig,
+    setRumble,
+    testRumble,
+    startHapticsTest,
+    cancelHapticsTest,
+  } = useRuntime();
   const [draft, setDraft] = useState<RumbleConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [pendingToggle, setPendingToggle] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [benchPending, setBenchPending] = useState<"start" | "cancel" | null>(null);
+  const [benchDraft, setBenchDraft] = useState({ left: 200, right: 160, duration_ms: 350 });
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    if (config && !saving) setDraft(config.rumble);
-  }, [config, saving]);
 
   const dirty = useMemo(
     () => Boolean(config && draft && JSON.stringify(config.rumble) !== JSON.stringify(draft)),
     [config, draft],
   );
+
+  useEffect(() => {
+    if (config && !dirty) setDraft(config.rumble);
+  }, [config, dirty]);
+
   const grouped = useMemo(groupFields, []);
+  const rumbleAvailable = capabilityEnabled(runtime, "rumble");
 
   if (!config || !draft) {
     return coreStatus === "online" ? (
@@ -84,7 +100,8 @@ export function HapticsPage() {
     setMessage(null);
     setFieldErrors({});
     try {
-      await updateConfig({ rumble: currentDraft });
+      const saved = await updateConfig({ rumble: currentDraft });
+      setDraft(saved.rumble);
       setMessage("Haptics configuration saved.");
     } catch (reason) {
       setError(reason);
@@ -126,6 +143,33 @@ export function HapticsPage() {
     }
   }
 
+  async function startBench() {
+    setBenchPending("start");
+    setError(null);
+    setMessage(null);
+    try {
+      await startHapticsTest(benchDraft);
+      setMessage("Bounded haptics test started; the server will neutralize the motors automatically.");
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setBenchPending(null);
+    }
+  }
+
+  async function cancelBench() {
+    setBenchPending("cancel");
+    setError(null);
+    try {
+      await cancelHapticsTest();
+      setMessage("Haptics test cancelled and motors neutralized.");
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setBenchPending(null);
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -144,9 +188,9 @@ export function HapticsPage() {
           Saved values are not editable until the local core responds.
         </Notice>
       )}
-      {!runtime?.capabilities.rumble && runtime && (
+      {runtime && !rumbleAvailable && (
         <Notice tone="warning" title="Rumble capability unavailable">
-          The connected controller does not report rumble support.
+          {capabilityReason(runtime, "rumble")}
         </Notice>
       )}
       {message && (
@@ -173,7 +217,7 @@ export function HapticsPage() {
             label="Master haptics"
             description="Enable audio-driven rumble output."
             checked={runtime?.rumble_enabled ?? false}
-            disabled={!canControl || pendingToggle}
+            disabled={!canControl || !rumbleAvailable || pendingToggle}
             onChange={(value) => void toggle(value)}
           />
           <div className="form-actions">
@@ -188,7 +232,11 @@ export function HapticsPage() {
                   </>
                 )}
               </Button>
-              <Button variant="quiet" onClick={() => void test()} disabled={!canControl || testing}>
+              <Button
+                variant="quiet"
+                onClick={() => void test()}
+                disabled={!canControl || !rumbleAvailable || testing}
+              >
                 {testing ? (
                   "Testing…"
                 ) : (
@@ -200,6 +248,89 @@ export function HapticsPage() {
               </Button>
             </div>
             {dirty && <span className="dirty-label">Unsaved changes</span>}
+          </div>
+        </Card>
+        <Card>
+          <div className="card-header">
+            <div>
+              <h2>Haptics test bench</h2>
+              <p>
+                One bounded run at a time. A server-side timeout and every teardown path return motors to
+                zero.
+              </p>
+            </div>
+            <TimerReset size={18} color="var(--violet)" />
+          </div>
+          <div className="card-grid grid-3">
+            {(
+              [
+                ["left", "Left motor", 0, 255],
+                ["right", "Right motor", 0, 255],
+                ["duration_ms", "Duration (ms)", 10, 5000],
+              ] as const
+            ).map(([key, label, min, max]) => (
+              <Field
+                key={key}
+                label={label}
+                help={key === "duration_ms" ? "10–5000 ms." : "0–255 intensity."}
+              >
+                <NumberInput
+                  aria-label={label}
+                  value={benchDraft[key]}
+                  min={min}
+                  max={max}
+                  step={key === "duration_ms" ? 10 : 1}
+                  disabled={
+                    !canControl ||
+                    !rumbleAvailable ||
+                    benchPending !== null ||
+                    runtime?.haptics_test?.status === "running"
+                  }
+                  onChange={(event) =>
+                    setBenchDraft((current) => ({ ...current, [key]: Number(event.target.value) }))
+                  }
+                />
+              </Field>
+            ))}
+          </div>
+          <div className="form-actions">
+            <div className="preview-status">
+              <StatusPill
+                tone={runtime?.haptics_test?.status === "running" ? "warning" : "neutral"}
+                label={runtime?.haptics_test?.status?.replace("_", " ") ?? "idle"}
+              />
+              {runtime?.haptics_test?.status === "running" && (
+                <span className="muted">
+                  Ends automatically at{" "}
+                  {new Date(runtime.haptics_test.expires_at * 1000).toLocaleTimeString()}
+                </span>
+              )}
+            </div>
+            <div className="page-header-action">
+              <Button
+                variant="quiet"
+                onClick={() => void cancelBench()}
+                disabled={
+                  !canControl ||
+                  !rumbleAvailable ||
+                  benchPending !== null ||
+                  runtime?.haptics_test?.status !== "running"
+                }
+              >
+                {benchPending === "cancel" ? "Cancelling…" : "Stop and neutralize"}
+              </Button>
+              <Button
+                onClick={() => void startBench()}
+                disabled={
+                  !canControl ||
+                  !rumbleAvailable ||
+                  benchPending !== null ||
+                  runtime?.haptics_test?.status === "running"
+                }
+              >
+                {benchPending === "start" ? "Starting…" : "Run bounded test"}
+              </Button>
+            </div>
           </div>
         </Card>
         <Card>

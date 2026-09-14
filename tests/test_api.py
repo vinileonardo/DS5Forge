@@ -154,6 +154,9 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(invalid.status_code, 422)
             self.assertEqual(invalid.json()["error"]["code"], "api.validation")
             self.assertIn("rumble.gate", invalid.json()["error"]["fields"])
+            below_range = await client.patch("/api/v1/config", json={"rumble": {"gamma": 0.005}})
+            self.assertEqual(below_range.status_code, 422)
+            self.assertEqual(below_range.json()["error"]["code"], "api.validation")
             numeric_string = await client.patch("/api/v1/config", json={"rumble": {"gate": "0.1"}})
             self.assertEqual(numeric_string.status_code, 422)
             unknown = await client.patch("/api/v1/config", json={"unexpected": True})
@@ -198,6 +201,86 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             rumble_test = await client.post("/api/v1/commands/rumble/test", json={"duration_ms": 10})
             self.assertEqual(rumble_test.status_code, 200)
             self.assertFalse(rumble_test.json()["accepted"])
+
+    async def test_controller_lab_endpoints_are_strict_and_capability_gated(self):
+        import httpx
+
+        transport = httpx.ASGITransport(app=self.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            telemetry = await client.get("/api/v1/controller/telemetry")
+            self.assertEqual(telemetry.status_code, 200)
+            self.assertIn("sticks", telemetry.json()["input"])
+            self.assertIn("touch0", telemetry.json()["input"])
+
+            disconnected_lightbar_read = await client.get("/api/v1/controller/lightbar")
+            self.assertEqual(disconnected_lightbar_read.status_code, 422)
+            self.assertEqual(disconnected_lightbar_read.json()["error"]["code"], "controller.unavailable")
+
+            extra = await client.put(
+                "/api/v1/controller/lightbar",
+                json={"r": 1, "g": 2, "b": 3, "unexpected": True},
+            )
+            self.assertEqual(extra.status_code, 422)
+            self.assertEqual(extra.json()["error"]["code"], "api.validation")
+
+            disconnected_lightbar = await client.put(
+                "/api/v1/controller/lightbar",
+                json={"r": 1, "g": 2, "b": 3},
+            )
+            self.assertEqual(disconnected_lightbar.status_code, 422)
+            self.assertEqual(disconnected_lightbar.json()["error"]["code"], "controller.unavailable")
+
+            trigger_preview = await client.post(
+                "/api/v1/controller/triggers/preview",
+                json={"left": {}, "right": {}, "duration_ms": 20},
+            )
+            self.assertEqual(trigger_preview.status_code, 422)
+            self.assertEqual(trigger_preview.json()["error"]["code"], "controller.unavailable")
+
+            coerced_calibration = await client.put(
+                "/api/v1/controller/sticks/calibration",
+                json={
+                    "left_deadzone": "0.1",
+                    "right_deadzone": 0.1,
+                    "left_center_x": 0,
+                    "left_center_y": 0,
+                    "right_center_x": 0,
+                    "right_center_y": 0,
+                },
+            )
+            self.assertEqual(coerced_calibration.status_code, 422)
+
+    async def test_full_profile_export_import_and_rejected_import(self):
+        import httpx
+
+        transport = httpx.ASGITransport(app=self.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            exported = await client.get("/api/v1/profiles/Default/export")
+            self.assertEqual(exported.status_code, 200)
+            profile = exported.json()
+            self.assertEqual(profile["schema_version"], 2)
+
+            saved = await client.put("/api/v1/profiles/API Lab", json=profile)
+            self.assertEqual(saved.status_code, 200)
+            self.assertEqual(saved.json()["full_profile"]["schema_version"], 2)
+
+            overwrite_required = await client.put("/api/v1/profiles/API Lab", json=profile)
+            self.assertEqual(overwrite_required.status_code, 422)
+            self.assertEqual(overwrite_required.json()["error"]["code"], "profile.overwrite_required")
+
+            imported = await client.post(
+                "/api/v1/profiles/import",
+                json={"content": json.dumps({**profile, "name": "Imported Lab"})},
+            )
+            self.assertEqual(imported.status_code, 200)
+            self.assertEqual(imported.json()["name"], "Imported Lab")
+
+            malformed = await client.post("/api/v1/profiles/import", json={"content": "{broken"})
+            self.assertEqual(malformed.status_code, 422)
+            self.assertEqual(malformed.json()["error"]["code"], "profile.invalid")
+
+            await client.delete("/api/v1/profiles/API%20Lab")
+            await client.delete("/api/v1/profiles/Imported%20Lab")
 
     async def test_websocket_starts_with_snapshot(self):
         scope = {

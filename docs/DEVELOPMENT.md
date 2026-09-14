@@ -1,4 +1,4 @@
-# P0/P1 development and verification
+# P0/P1/P2 development and verification
 
 Python 3.12.x is the required P0 development/build runtime. From the repository root:
 
@@ -9,6 +9,8 @@ ruff format source tests
 ruff check source tests
 mypy source/dualsense_companion
 pytest
+python -m compileall -q source tests
+python -m build --wheel
 ```
 
 Headless core/API and the retained GUI are separate entry modes:
@@ -22,7 +24,7 @@ The GUI/API share one `CoreFacade` in the desktop process. Use injected fake
 controller, capture and pointer adapters for tests; do not boot Bluetooth,
 wireless transports or virtual-controller software.
 
-## P1 frontend
+## P1/P2 frontend
 
 Node.js 20+ and npm are required for the web client. The browser client is
 served separately from the Python authority during development:
@@ -53,6 +55,7 @@ npm run typecheck
 npm test
 npm run build
 npm run e2e
+npm audit --omit=dev
 ```
 
 Tauri 2 local native development is optional. It is not required for Python
@@ -97,6 +100,17 @@ cd source
 build.bat
 ```
 
+The P2 Controller Lab is at `/controller` and has Input, Triggers, Lighting and
+Sticks tabs. Keep the route usable while offline, but disable output commands
+until the core reports a fresh connected USB snapshot. Browser imports use
+`File.text()` and the API's 64 KiB limit; do not add filesystem, shell or
+process permissions to Tauri.
+
+P2 API/profile checks should include strict unknown-field/coercion/non-finite
+rejection, capability-disabled no-call behavior, trigger timeout/cancel and
+reconnect neutralization, bounded haptics tests, full-profile validation before
+apply, atomic writes and state-preserving rejected imports.
+
 ## Gate recording
 
 - Format/lint/static checks: run in CI and record the exact command/result.
@@ -107,3 +121,6 @@ build.bat
 - WebSocket smoke: record initial snapshot, a state event and reconnect.
 - USB checklist: complete `docs/D0_SMOKE_CHECKLIST.md` on Windows with a real
   cable/controller. Linux/CI results must remain `HARDWARE VALIDATION PENDING`.
+- P2 evidence: record separate automated Linux, frontend, Windows build,
+  physical USB and limitation sections in `docs/P2_VALIDATION.md`; automated
+  green tests do not substitute for physical DualSense evidence.

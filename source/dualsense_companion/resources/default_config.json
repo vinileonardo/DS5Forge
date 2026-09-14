@@ -26,6 +26,10 @@
     "acceleration": 0.006,
     "accel_cap": 1.2,
     "scroll_speed": 0.35,
-    "tap_to_click": true
+    "tap_to_click": true,
+    "gestures_enabled": true,
+    "two_finger_scroll": true,
+    "swipe_enabled": true,
+    "swipe_threshold": 40.0
   }
 }

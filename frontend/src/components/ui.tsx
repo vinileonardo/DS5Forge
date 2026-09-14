@@ -183,6 +183,7 @@ export function ConfirmDialog({
   title,
   description,
   confirmLabel,
+  busyLabel = "Working…",
   onConfirm,
   onCancel,
   busy = false,
@@ -190,6 +191,7 @@ export function ConfirmDialog({
   title: string;
   description: string;
   confirmLabel: string;
+  busyLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
   busy?: boolean;
@@ -248,7 +250,7 @@ export function ConfirmDialog({
             Cancel
           </Button>
           <Button variant="danger" onClick={onConfirm} disabled={busy}>
-            {busy ? "Deleting…" : confirmLabel}
+            {busy ? busyLabel : confirmLabel}
           </Button>
         </div>
       </div>

@@ -6,15 +6,26 @@ from typing import Any
 
 from ..core.facade import CoreFacade
 from ..diagnostics.logging import get_logger
-from ..domain.errors import DS5ForgeError
+from ..domain.errors import DS5ForgeError, ErrorCode
+from ..domain.models import AdaptiveTriggerEffect, LightbarState, StickCalibration, TriggerState
 from .origins import DEFAULT_ALLOWED_ORIGINS, validate_allowed_origins
 from .schemas import (
     API_PREFIX,
     ConfigPatchRequest,
     ConfigReplaceRequest,
     ConfigResponse,
+    ControllerTelemetryResponse,
     DeleteProfileResponse,
+    FullControllerProfile,
+    FullProfileSaveRequest,
+    GestureConfigRequest,
+    GestureConfigResponse,
+    HapticsTestRequest,
+    HapticsTestRunResponse,
     HealthResponse,
+    LightbarApplyRequest,
+    LightbarResponse,
+    ProfileImportRequest,
     ProfileLoadResponse,
     ProfileSaveResponse,
     ProfilesResponse,
@@ -22,7 +33,14 @@ from .schemas import (
     RumbleTestCommand,
     RumbleTestResponse,
     RuntimeStateResponse,
+    StickCalibrationRequest,
+    StickCalibrationResponse,
     ToggleCommand,
+    TriggerEffectRequest,
+    TriggerPairRequest,
+    TriggerPreviewRequest,
+    TriggerPreviewResponse,
+    TriggerStateResponse,
 )
 
 LOGGER = get_logger(__name__)
@@ -129,14 +147,40 @@ def create_app(facade: CoreFacade, *, allowed_origins: tuple[str, ...] = DEFAULT
 
     @app.post(f"{API_PREFIX}/profiles/{{name}}/load", response_model=ProfileLoadResponse)
     async def load_profile(name: str) -> dict[str, Any]:
-        return {"profile": name, "config": facade.load_profile(name)}
+        result = facade.load_profile_result(name)
+        return {
+            "profile": result["profile"],
+            "config": result["config"],
+            "unsupported_sections": result["unsupported_sections"],
+            "state": result["state"],
+        }
+
+    @app.get(f"{API_PREFIX}/profiles/{{name}}", response_model=FullControllerProfile)
+    async def export_profile(name: str) -> dict[str, Any]:
+        return facade.export_profile(name)
+
+    @app.get(f"{API_PREFIX}/profiles/{{name}}/export", response_model=FullControllerProfile)
+    async def export_profile_document(name: str) -> dict[str, Any]:
+        return facade.export_profile(name)
 
     @app.put(f"{API_PREFIX}/profiles/{{name}}", response_model=ProfileSaveResponse)
-    async def save_profile(name: str, payload: RumbleConfigPatch) -> dict[str, Any]:
+    async def save_profile(name: str, payload: FullProfileSaveRequest | RumbleConfigPatch) -> dict[str, Any]:
+        if isinstance(payload, FullProfileSaveRequest):
+            profile = payload.model_dump(exclude={"confirm_overwrite"})
+            saved = facade.save_controller_profile(name, profile, confirm_overwrite=payload.confirm_overwrite)
+            return {"profile": name, "full_profile": saved}
         return {
             "profile": name,
             "rumble": facade.save_profile(name, payload.model_dump(exclude_unset=True, exclude_none=True)),
         }
+
+    @app.post(f"{API_PREFIX}/profiles/import", response_model=FullControllerProfile)
+    async def import_profile(payload: ProfileImportRequest) -> dict[str, Any]:
+        return facade.import_profile(
+            payload.content,
+            name=payload.name,
+            confirm_overwrite=payload.confirm_overwrite,
+        )
 
     @app.delete(f"{API_PREFIX}/profiles/{{name}}", response_model=DeleteProfileResponse)
     async def delete_profile(name: str) -> dict[str, Any]:
@@ -156,6 +200,113 @@ def create_app(facade: CoreFacade, *, allowed_origins: tuple[str, ...] = DEFAULT
         command = payload or RumbleTestCommand()
         accepted = facade.test_rumble(left=command.left, right=command.right, duration_ms=command.duration_ms)
         return {"accepted": accepted}
+
+    @app.get(f"{API_PREFIX}/controller/input", response_model=ControllerTelemetryResponse)
+    async def controller_input() -> dict[str, Any]:
+        return facade.input_telemetry().to_dict()
+
+    @app.get(f"{API_PREFIX}/controller/telemetry", response_model=ControllerTelemetryResponse)
+    async def controller_telemetry() -> dict[str, Any]:
+        return facade.input_telemetry().to_dict()
+
+    @app.get(f"{API_PREFIX}/controller/lightbar", response_model=LightbarResponse)
+    async def controller_lightbar() -> dict[str, Any]:
+        return facade.lightbar_state().to_dict()
+
+    @app.put(f"{API_PREFIX}/controller/lightbar", response_model=LightbarResponse)
+    async def apply_lightbar(payload: LightbarApplyRequest) -> dict[str, Any]:
+        facade.apply_lightbar(LightbarState(**payload.model_dump()))
+        return facade.state_dict()["lightbar"]
+
+    @app.post(f"{API_PREFIX}/controller/lightbar/reset", response_model=LightbarResponse)
+    async def reset_lightbar() -> dict[str, Any]:
+        facade.reset_lightbar()
+        return facade.state_dict()["lightbar"]
+
+    @app.get(f"{API_PREFIX}/controller/triggers", response_model=TriggerStateResponse)
+    async def controller_triggers() -> dict[str, Any]:
+        return facade.state_dict()["triggers"]
+
+    @app.put(f"{API_PREFIX}/controller/triggers", response_model=TriggerStateResponse)
+    async def configure_trigger_pair(payload: TriggerPairRequest) -> dict[str, Any]:
+        state = TriggerState(
+            left=AdaptiveTriggerEffect(**payload.left.model_dump()),
+            right=AdaptiveTriggerEffect(**payload.right.model_dump()),
+        )
+        facade.configure_triggers(state)
+        return facade.state_dict()["triggers"]
+
+    @app.put(f"{API_PREFIX}/controller/triggers/{{trigger}}", response_model=TriggerStateResponse)
+    async def configure_trigger(trigger: str, payload: TriggerEffectRequest) -> dict[str, Any]:
+        current = facade.trigger_state()
+        effect = AdaptiveTriggerEffect(**payload.model_dump())
+        if trigger == "left":
+            state = TriggerState(left=effect, right=current.right)
+        elif trigger == "right":
+            state = TriggerState(left=current.left, right=effect)
+        else:
+            raise DS5ForgeError(
+                code=ErrorCode.API_VALIDATION,
+                message="Trigger must be left or right.",
+                fields={"trigger": "must be left or right"},
+            )
+        facade.configure_triggers(state)
+        return facade.state_dict()["triggers"]
+
+    @app.post(f"{API_PREFIX}/controller/triggers/preview", response_model=TriggerPreviewResponse)
+    async def preview_triggers(payload: TriggerPreviewRequest) -> dict[str, Any]:
+        state = TriggerState(
+            left=AdaptiveTriggerEffect(**payload.left.model_dump()),
+            right=AdaptiveTriggerEffect(**payload.right.model_dump()),
+        )
+        preview = facade.preview_triggers(state, duration_ms=payload.duration_ms)
+        return preview.to_dict() if hasattr(preview, "to_dict") else facade.state_dict()["triggers"]["preview"]
+
+    @app.delete(f"{API_PREFIX}/controller/triggers/preview", response_model=TriggerPreviewResponse | None)
+    async def cancel_trigger_preview() -> dict[str, Any] | None:
+        preview = facade.cancel_trigger_preview()
+        return (
+            preview.to_dict()
+            if preview is not None and hasattr(preview, "to_dict")
+            else facade.state_dict()["triggers"]["preview"]
+        )
+
+    @app.post(f"{API_PREFIX}/controller/triggers/reset", response_model=TriggerStateResponse)
+    async def reset_triggers() -> dict[str, Any]:
+        facade.reset_triggers()
+        return facade.state_dict()["triggers"]
+
+    @app.post(f"{API_PREFIX}/controller/haptics/test", response_model=HapticsTestRunResponse)
+    async def controller_haptics_test(payload: HapticsTestRequest | None = None) -> dict[str, Any]:
+        command = payload or HapticsTestRequest()
+        return facade.start_haptics_test(
+            left=command.left,
+            right=command.right,
+            duration_ms=command.duration_ms,
+        ).to_dict()
+
+    @app.delete(f"{API_PREFIX}/controller/haptics/test", response_model=HapticsTestRunResponse | None)
+    async def cancel_haptics_test() -> dict[str, Any] | None:
+        run = facade.cancel_haptics_test()
+        return run.to_dict() if run is not None and hasattr(run, "to_dict") else None
+
+    @app.get(f"{API_PREFIX}/controller/sticks/calibration", response_model=StickCalibrationResponse)
+    async def get_stick_calibration() -> dict[str, Any]:
+        return facade.state_dict()["stick_calibration"]
+
+    @app.put(f"{API_PREFIX}/controller/sticks/calibration", response_model=StickCalibrationResponse)
+    async def update_stick_calibration(payload: StickCalibrationRequest) -> dict[str, Any]:
+        facade.update_stick_calibration(StickCalibration(**payload.model_dump()))
+        return facade.state_dict()["stick_calibration"]
+
+    @app.get(f"{API_PREFIX}/controller/gestures", response_model=GestureConfigResponse)
+    async def get_gesture_config() -> dict[str, Any]:
+        return facade.state_dict()["gesture_config"]
+
+    @app.patch(f"{API_PREFIX}/controller/gestures", response_model=GestureConfigResponse)
+    async def update_gesture_config(payload: GestureConfigRequest) -> dict[str, Any]:
+        facade.update_gesture_config(payload.model_dump(exclude_unset=True, exclude_none=True))
+        return facade.state_dict()["gesture_config"]
 
     @app.websocket(f"{API_PREFIX}/ws")
     async def websocket(websocket: WebSocket) -> None:

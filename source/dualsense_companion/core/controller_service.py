@@ -7,8 +7,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..diagnostics.logging import get_logger
-from ..domain.errors import ControllerUnavailableError, DS5ForgeError, ErrorCode
-from ..domain.models import ConnectionState, ControllerReading
+from ..domain.errors import CapabilityUnavailableError, ControllerUnavailableError, DS5ForgeError, ErrorCode
+from ..domain.models import ConnectionState, ControllerReading, LightbarState, TriggerState
 from .ports import ControllerAdapter, ControllerFactory
 
 LOGGER = get_logger(__name__)
@@ -114,6 +114,111 @@ class ControllerService:
             self._neutralize(adapter)
         if self.on_motors:
             self.on_motors(0, 0)
+
+    def neutralize_motors(self) -> None:
+        """Stop rumble without touching adaptive-trigger output.
+
+        Rumble-only operations (muting audio rumble, finishing a haptics bench)
+        must not clobber a user's adaptive-trigger configuration. Full
+        neutralization stays reserved for disconnect and teardown paths.
+        """
+
+        if self.adapter is None:
+            return
+        if not self.set_motors(0, 0):
+            raise DS5ForgeError(
+                ErrorCode.CONTROLLER_OUTPUT_FAILED,
+                "Motor output could not be neutralized.",
+            )
+
+    def get_lightbar(self) -> LightbarState:
+        adapter = self._require_adapter("lightbar")
+        getter = getattr(adapter, "get_lightbar", None)
+        if not callable(getter):
+            raise CapabilityUnavailableError("lightbar", "The connected adapter does not expose lightbar state.")
+        try:
+            value = getter()
+            return value if isinstance(value, LightbarState) else LightbarState()
+        except DS5ForgeError:
+            raise
+        except Exception as exc:
+            raise DS5ForgeError(
+                ErrorCode.LIGHTBAR_OUTPUT_FAILED, "Lightbar state could not be read.", detail=str(exc)
+            ) from exc
+
+    def set_lightbar(self, state: LightbarState) -> None:
+        adapter = self._require_adapter("lightbar")
+        setter = getattr(adapter, "set_lightbar", None)
+        if not callable(setter):
+            raise CapabilityUnavailableError("lightbar", "The connected adapter does not expose lightbar output.")
+        try:
+            setter(state)
+        except DS5ForgeError:
+            raise
+        except Exception as exc:
+            raise DS5ForgeError(ErrorCode.LIGHTBAR_OUTPUT_FAILED, "Lightbar output failed.", detail=str(exc)) from exc
+
+    def reset_lightbar(self) -> None:
+        adapter = self._require_adapter("lightbar")
+        resetter = getattr(adapter, "reset_lightbar", None)
+        if callable(resetter):
+            try:
+                resetter()
+                return
+            except DS5ForgeError:
+                raise
+            except Exception as exc:
+                raise DS5ForgeError(
+                    ErrorCode.LIGHTBAR_OUTPUT_FAILED, "Lightbar reset failed.", detail=str(exc)
+                ) from exc
+        self.set_lightbar(LightbarState())
+
+    def set_triggers(self, state: TriggerState) -> None:
+        adapter = self._require_adapter("adaptive_triggers")
+        setter = getattr(adapter, "set_triggers", None)
+        if not callable(setter):
+            raise CapabilityUnavailableError(
+                "adaptive_triggers", "The connected adapter does not expose adaptive-trigger output."
+            )
+        try:
+            setter(state)
+        except DS5ForgeError:
+            raise
+        except Exception as exc:
+            raise DS5ForgeError(
+                ErrorCode.TRIGGER_OUTPUT_FAILED, "Adaptive-trigger output failed.", detail=str(exc)
+            ) from exc
+
+    def reset_triggers(self) -> None:
+        adapter = self._require_adapter("adaptive_triggers")
+        resetter = getattr(adapter, "reset_triggers", None)
+        if not callable(resetter):
+            raise CapabilityUnavailableError(
+                "adaptive_triggers", "The connected adapter does not expose adaptive-trigger reset output."
+            )
+        try:
+            resetter()
+        except DS5ForgeError:
+            raise
+        except Exception as exc:
+            raise DS5ForgeError(
+                ErrorCode.TRIGGER_OUTPUT_FAILED, "Adaptive triggers could not be reset.", detail=str(exc)
+            ) from exc
+
+    def _require_adapter(self, capability: str) -> ControllerAdapter:
+        adapter = self.adapter
+        if adapter is None:
+            raise ControllerUnavailableError()
+        capabilities = getattr(adapter, "capabilities", None)
+        if capabilities is not None:
+            availability = getattr(capabilities, "availability", {}).get(capability)
+            supported = bool(getattr(capabilities, capability, False))
+            if availability is not None:
+                supported = bool(getattr(availability, "enabled", supported))
+            if not supported:
+                reason = getattr(availability, "reason", None)
+                raise CapabilityUnavailableError(capability, reason)
+        return adapter
 
     def pulse(self, left: int = 200, right: int = 160, duration: float = 0.35) -> bool:
         if self.adapter is None:
@@ -278,7 +383,9 @@ class ControllerService:
                 LOGGER.exception("lifecycle callback failed", extra={"event": "controller.lifecycle_callback"})
 
     def _wait(self, seconds: float) -> None:
-        self.stop_event.wait(max(0.01, seconds))
+        # Keep the configured USB read cadence (P2 uses approximately 250 Hz)
+        # while still avoiding a zero-duration busy loop for malformed values.
+        self.stop_event.wait(max(0.001, seconds))
 
     @staticmethod
     def _neutralize(adapter: ControllerAdapter) -> None:

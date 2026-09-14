@@ -3,6 +3,9 @@ import { z } from "zod";
 import {
   AudioSchema,
   ConfigSchema,
+  ControllerLabEventSchema,
+  ControllerInputSchema,
+  ControllerTelemetrySchema,
   ConnectionStateSchema,
   ErrorSnapshotSchema,
   EventEnvelopeSchema,
@@ -25,11 +28,22 @@ export type WebSocketFactory = (url: string) => WebSocketLike;
 const KNOWN_TYPES = new Set([
   "state.snapshot",
   "state.updated",
+  "controller.input",
   "controller.lifecycle",
   "audio.status",
   "config.changed",
   "profile.changed",
+  "controller.lab",
   "diagnostic",
+]);
+const KNOWN_LAB_KINDS = new Set([
+  "lightbar.applied",
+  "lightbar.reset",
+  "triggers.applied",
+  "triggers.reset",
+  "triggers.preview",
+  "haptics.test",
+  "sticks.calibration_changed",
 ]);
 
 export type ParsedSocketMessage = { kind: "event"; event: RuntimeEvent } | { kind: "unknown"; type: string };
@@ -59,6 +73,18 @@ export function parseSocketMessage(value: unknown): ParsedSocketMessage {
           type: envelope.type,
           version: 1,
           payload: z.object({ state: RuntimeStateSchema }).strict().parse(envelope.payload),
+        },
+      };
+    case "controller.input":
+      return {
+        kind: "event",
+        event: {
+          type: envelope.type,
+          version: 1,
+          payload: z
+            .object({ input: ControllerInputSchema, telemetry: ControllerTelemetrySchema })
+            .strict()
+            .parse(envelope.payload),
         },
       };
     case "controller.lifecycle":
@@ -96,6 +122,29 @@ export function parseSocketMessage(value: unknown): ParsedSocketMessage {
           payload: z.record(z.string(), z.unknown()).parse(envelope.payload),
         },
       };
+    case "controller.lab": {
+      const kind =
+        typeof envelope.payload === "object" && envelope.payload !== null && "kind" in envelope.payload
+          ? (envelope.payload as { kind?: unknown }).kind
+          : undefined;
+      const parsed = ControllerLabEventSchema.safeParse(envelope.payload);
+      if (!parsed.success) {
+        // A new lab kind can be ignored without making an otherwise valid
+        // v1 socket unusable. Existing kinds remain strict/protocol-trusted.
+        if (typeof kind === "string" && !KNOWN_LAB_KINDS.has(kind)) {
+          return { kind: "unknown", type: envelope.type };
+        }
+        throw parsed.error;
+      }
+      return {
+        kind: "event",
+        event: {
+          type: envelope.type,
+          version: 1,
+          payload: parsed.data,
+        },
+      };
+    }
     case "diagnostic":
       return {
         kind: "event",

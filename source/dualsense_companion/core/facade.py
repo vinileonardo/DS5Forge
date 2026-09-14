@@ -10,21 +10,40 @@ from typing import Any
 
 from ..diagnostics.health import health_from_snapshot
 from ..diagnostics.logging import get_logger
-from ..domain.errors import ConfigValidationError, DS5ForgeError, ErrorCode
+from ..domain.errors import CapabilityUnavailableError, ConfigValidationError, DS5ForgeError, ErrorCode
 from ..domain.events import EventType
 from ..domain.models import (
+    AdaptiveTriggerEffect,
     AudioSnapshot,
     ConnectionState,
+    ControllerCapabilities,
+    ControllerInput,
+    ControllerTelemetry,
+    GestureConfig,
+    HapticsTestRun,
     HealthSnapshot,
+    LightbarState,
     MotorSnapshot,
     RuntimeSnapshot,
+    StickCalibration,
+    TriggerPreviewState,
+    TriggerState,
+    normalize_controller_reading,
 )
-from .config import ConfigRepository, merge_config, validate_config
+from .config import (
+    ConfigRepository,
+    default_controller_profile,
+    merge_config,
+    migrate_controller_profile,
+    validate_config,
+)
+from .controller_lab import HapticsTestBench, TriggerPreviewCoordinator
 from .controller_service import ControllerService, LifecycleNotification
 from .event_bus import Subscription
 from .haptics_service import HapticsService
 from .ports import AudioCaptureFactory, ControllerAdapter, ControllerFactory, MouseOutput
 from .state_store import StateStore
+from .telemetry import TelemetryPublisher
 from .touchpad import TouchpadService
 
 LOGGER = get_logger(__name__)
@@ -59,6 +78,10 @@ class CoreFacade:
         self._haptics: HapticsService | None = None
         self._started = False
         self._stop_lock = threading.Lock()
+        self._lab_lock = threading.RLock()
+        self._disconnecting = False
+        self._preview_effect = TriggerState()
+        self._last_profile_apply: dict[str, Any] | None = None
 
         initial_error = self.config_repository.last_error.to_snapshot() if self.config_repository.last_error else None
         health = HealthSnapshot(
@@ -70,6 +93,17 @@ class CoreFacade:
         initial = RuntimeSnapshot.initial(
             touchpad_enabled=bool(self._config["trackpad"].get("trackpad_enabled_on_start", True)),
             now=time.time(),
+        )
+        trackpad = self._config.get("trackpad", {})
+        initial = replace(
+            initial,
+            gesture_config=GestureConfig(
+                enabled=bool(trackpad.get("gestures_enabled", True)),
+                two_finger_scroll=bool(trackpad.get("two_finger_scroll", True)),
+                tap_to_click=bool(trackpad.get("tap_to_click", True)),
+                swipe_enabled=bool(trackpad.get("swipe_enabled", True)),
+                swipe_threshold=float(trackpad.get("swipe_threshold", 40.0)),
+            ),
         )
         initial = replace(initial, health=health, last_error=initial_error)
         self.store = StateStore(initial)
@@ -89,12 +123,24 @@ class CoreFacade:
             on_reading=self._on_reading,
             on_motors=self._on_motors,
         )
+        self._telemetry = TelemetryPublisher(max_hz=30.0, on_publish=self._on_telemetry)
+        self._trigger_preview = TriggerPreviewCoordinator(
+            self._apply_trigger_hardware,
+            self._reset_trigger_hardware,
+            on_state=self._on_trigger_preview,
+        )
+        self._haptics_bench = HapticsTestBench(
+            self.controller.set_motors,
+            self.controller.neutralize_motors,
+            on_state=self._on_haptics_test,
+        )
 
     def start(self) -> None:
         with self._stop_lock:
             if self._started:
                 return
             self._started = True
+            self._disconnecting = False
         LOGGER.info("core starting", extra={"event": "core.start"})
         self.store.mutate(
             lambda current: replace(
@@ -119,6 +165,9 @@ class CoreFacade:
     def stop(self) -> None:
         with self._stop_lock:
             if not self._started:
+                self._disconnecting = True
+                self._haptics_bench.stop()
+                self._best_effort_preview_reset(status="reset")
                 self.touchpad.reset()
                 current = self.snapshot()
                 self.store.update(
@@ -138,6 +187,9 @@ class CoreFacade:
                 return
             self._started = False
         LOGGER.info("core stopping", extra={"event": "core.stop"})
+        self._disconnecting = True
+        self._haptics_bench.stop()
+        self._best_effort_preview_reset(status="reset")
         self.controller.stop()
         self._stop_haptics()
         self.touchpad.reset()
@@ -189,7 +241,10 @@ class CoreFacade:
         rumble_patch = patch.get("rumble")
         if replace_all or (isinstance(rumble_patch, dict) and bool(RUMBLE_REBUILD_KEYS.intersection(rumble_patch))):
             self._reload_audio.set()
-        self.store.update(config_version=int(result["schema_version"]))
+        self.store.update(
+            config_version=int(result["schema_version"]),
+            gesture_config=self._gesture_from_config(result),
+        )
         if persist:
             self._clear_config_degraded()
         self.store.publish(EventType.CONFIG.value, {"config": result})
@@ -199,7 +254,7 @@ class CoreFacade:
         enabled = bool(enabled)
         snapshot = self.store.update(rumble_enabled=enabled)
         if not enabled:
-            self.controller.neutralize()
+            self.controller.neutralize_motors()
             snapshot = self.store.update(motors=MotorSnapshot())
         return snapshot
 
@@ -229,17 +284,306 @@ class CoreFacade:
             raise ConfigValidationError(fields={"motors": "values must be between 0 and 255"})
         if not 10 <= int(duration_ms) <= 5_000:
             raise ConfigValidationError(fields={"duration_ms": "must be between 10 and 5000"})
+        current = self.snapshot()
+        # A disconnected core keeps the historical ``accepted=False`` no-op,
+        # but a connected adapter that explicitly reports no rumble surface must
+        # never be sent motor output.
+        if current.connection == ConnectionState.CONNECTED and not _capability_enabled(current.capabilities, "rumble"):
+            capability = current.capabilities.capability("rumble")
+            raise CapabilityUnavailableError("rumble", capability.reason)
         return self.controller.pulse(int(left), int(right), int(duration_ms) / 1000)
+
+    def input_telemetry(self) -> ControllerTelemetry:
+        return self.snapshot().telemetry
+
+    def lightbar_state(self) -> LightbarState:
+        with self._lab_lock:
+            try:
+                state = self.controller.get_lightbar()
+            except DS5ForgeError as exc:
+                self._record_error(exc)
+                raise
+            snapshot = self.store.update(lightbar=state)
+            return snapshot.lightbar
+
+    def apply_lightbar(self, state: LightbarState) -> LightbarState:
+        _validate_lightbar_state(state)
+        with self._lab_lock:
+            try:
+                self.controller.set_lightbar(state)
+            except DS5ForgeError as exc:
+                if self._best_effort_reset_lightbar():
+                    self.store.update(lightbar=LightbarState())
+                self._record_error(exc)
+                raise
+            snapshot = self.store.update(lightbar=state)
+            self.store.publish(
+                EventType.LAB.value,
+                {
+                    "kind": "lightbar.applied",
+                    "state": state.to_dict() if hasattr(state, "to_dict") else snapshot.to_dict()["lightbar"],
+                },
+            )
+            return snapshot.lightbar
+
+    def reset_lightbar(self) -> LightbarState:
+        with self._lab_lock:
+            try:
+                self.controller.reset_lightbar()
+            except DS5ForgeError as exc:
+                self._record_error(exc)
+                raise
+            state = LightbarState()
+            snapshot = self.store.update(lightbar=state)
+            self.store.publish(EventType.LAB.value, {"kind": "lightbar.reset", "state": snapshot.to_dict()["lightbar"]})
+            return snapshot.lightbar
+
+    def trigger_state(self) -> TriggerState:
+        return self.snapshot().triggers
+
+    def configure_triggers(self, state: TriggerState) -> TriggerState:
+        _validate_trigger_state(state)
+        with self._lab_lock:
+            try:
+                self._trigger_preview.cancel()
+            except DS5ForgeError as exc:
+                self._record_error(exc)
+                raise
+            try:
+                self.controller.set_triggers(state)
+            except DS5ForgeError as exc:
+                if self._best_effort_reset_triggers():
+                    self.store.update(triggers=TriggerState())
+                self._record_error(exc)
+                raise
+            snapshot = self.store.update(triggers=state)
+            self.store.publish(
+                EventType.LAB.value, {"kind": "triggers.applied", "state": snapshot.to_dict()["triggers"]}
+            )
+            return snapshot.triggers
+
+    def preview_triggers(self, state: TriggerState, *, duration_ms: int = 1_000) -> TriggerPreviewState:
+        _validate_trigger_state(state)
+        with self._lab_lock:
+            # Publish the effect being previewed before the coordinator emits its
+            # synchronous running state, otherwise the first preview event would
+            # report the previously configured effect instead of this one.
+            previous_effect = self._preview_effect
+            self._preview_effect = state
+            try:
+                preview = self._trigger_preview.start(state, duration_ms=duration_ms)
+            except DS5ForgeError as exc:
+                self._preview_effect = previous_effect
+                self._record_error(exc)
+                raise
+            self.store.update(triggers=replace(state, preview=preview))
+            return preview
+
+    def cancel_trigger_preview(self) -> TriggerPreviewState | None:
+        with self._lab_lock:
+            try:
+                return self._trigger_preview.cancel()
+            except DS5ForgeError as exc:
+                self._record_error(exc)
+                raise
+
+    def reset_triggers(self) -> TriggerState:
+        with self._lab_lock:
+            try:
+                self._trigger_preview.reset(status="reset")
+            except DS5ForgeError as exc:
+                self._record_error(exc)
+                raise
+            try:
+                self.controller.reset_triggers()
+            except DS5ForgeError as exc:
+                self._record_error(exc)
+                raise
+            snapshot = self.store.update(triggers=TriggerState())
+            self.store.publish(EventType.LAB.value, {"kind": "triggers.reset", "state": snapshot.to_dict()["triggers"]})
+            return snapshot.triggers
+
+    def haptics_test_state(self) -> HapticsTestRun | None:
+        return self.snapshot().haptics_test
+
+    def start_haptics_test(self, *, left: int = 200, right: int = 160, duration_ms: int = 350) -> HapticsTestRun:
+        if self.snapshot().connection != ConnectionState.CONNECTED:
+            raise DS5ForgeError(
+                ErrorCode.CONTROLLER_UNAVAILABLE,
+                "A connected USB controller is required for the haptics test.",
+            )
+        capabilities = self.snapshot().capabilities
+        if not _capability_enabled(capabilities, "rumble"):
+            capability = capabilities.capability("rumble")
+            raise CapabilityUnavailableError("rumble", capability.reason)
+        with self._lab_lock:
+            self._stop_haptics()
+            try:
+                return self._haptics_bench.start(left=left, right=right, duration_ms=duration_ms)
+            except DS5ForgeError as exc:
+                self._record_error(exc)
+                self._restart_haptics_if_ready()
+                raise
+
+    def cancel_haptics_test(self) -> HapticsTestRun | None:
+        return self._haptics_bench.cancel()
+
+    def stick_calibration(self) -> StickCalibration:
+        return self.snapshot().stick_calibration
+
+    def update_stick_calibration(self, calibration: StickCalibration) -> StickCalibration:
+        _validate_stick_calibration(calibration)
+        snapshot = self.store.update(stick_calibration=calibration)
+        self.store.publish(
+            EventType.LAB.value,
+            {"kind": "sticks.calibration_changed", "state": snapshot.to_dict()["stick_calibration"]},
+        )
+        return snapshot.stick_calibration
+
+    def gesture_config(self) -> GestureConfig:
+        return self.snapshot().gesture_config
+
+    def update_gesture_config(self, patch: dict[str, Any]) -> GestureConfig:
+        if not isinstance(patch, dict):
+            raise ConfigValidationError(fields={"gesture_config": "must be an object"})
+        allowed = {"enabled", "two_finger_scroll", "tap_to_click", "swipe_enabled", "swipe_threshold"}
+        unknown = sorted(set(patch) - allowed)
+        if unknown:
+            raise ConfigValidationError(fields={"gesture_config": {"unknown": unknown}})
+        current = self.gesture_config()
+        merged = {
+            "enabled": current.enabled,
+            "two_finger_scroll": current.two_finger_scroll,
+            "tap_to_click": current.tap_to_click,
+            "swipe_enabled": current.swipe_enabled,
+            "swipe_threshold": current.swipe_threshold,
+            **patch,
+        }
+        trackpad_patch = {
+            "gestures_enabled": merged["enabled"],
+            "two_finger_scroll": merged["two_finger_scroll"],
+            "tap_to_click": merged["tap_to_click"],
+            "swipe_enabled": merged["swipe_enabled"],
+            "swipe_threshold": merged["swipe_threshold"],
+        }
+        if any(not isinstance(value, bool) for key, value in merged.items() if key != "swipe_threshold"):
+            raise ConfigValidationError(fields={"gesture_config": "boolean fields must be boolean"})
+        if not isinstance(merged["swipe_threshold"], (int, float)) or isinstance(merged["swipe_threshold"], bool):
+            raise ConfigValidationError(fields={"swipe_threshold": "must be finite and between 1 and 500"})
+        self.update_config({"trackpad": trackpad_patch})
+        return self.gesture_config()
 
     def profiles(self) -> list[dict[str, Any]]:
         return self.config_repository.list_profiles()
 
     def load_profile(self, name: str) -> dict[str, Any]:
-        profile = self.config_repository.load_profile(name)
-        config = self.update_config({"rumble": profile}, persist=False)
-        self.store.update(active_profile=name)
-        self.store.publish(EventType.PROFILE.value, {"name": name, "source": "applied", "config": config})
-        return config
+        return self.load_profile_result(name)["config"]
+
+    def load_profile_result(self, name: str) -> dict[str, Any]:
+        profile = self.config_repository.load_controller_profile(name)
+        result = self.apply_controller_profile(profile, name=name)
+        self._last_profile_apply = result
+        return result
+
+    def controller_profile(self, name: str | None = None) -> dict[str, Any]:
+        snapshot = self.snapshot()
+        profile = default_controller_profile(name or snapshot.active_profile, rumble=self._section("rumble"))
+        profile["lightbar"] = snapshot.to_dict()["lightbar"]
+        trigger_dict = snapshot.to_dict()["triggers"]
+        profile["triggers"] = {"left": trigger_dict["left"], "right": trigger_dict["right"]}
+        profile["sticks"] = snapshot.to_dict()["stick_calibration"]
+        profile["touchpad"] = {
+            "enabled": snapshot.gesture_config.enabled,
+            "two_finger_scroll": snapshot.gesture_config.two_finger_scroll,
+            "tap_to_click": snapshot.gesture_config.tap_to_click,
+            "swipe_enabled": snapshot.gesture_config.swipe_enabled,
+            "swipe_threshold": snapshot.gesture_config.swipe_threshold,
+        }
+        return migrate_controller_profile(profile, name=profile["name"])
+
+    def apply_controller_profile(self, profile: dict[str, Any], *, name: str | None = None) -> dict[str, Any]:
+        normalized = migrate_controller_profile(profile, name=name or str(profile.get("name", "Imported")))
+        profile_name = name or normalized["name"]
+        candidate_trackpad = {
+            "gestures_enabled": normalized["touchpad"]["enabled"],
+            "two_finger_scroll": normalized["touchpad"]["two_finger_scroll"],
+            "tap_to_click": normalized["touchpad"]["tap_to_click"],
+            "swipe_enabled": normalized["touchpad"]["swipe_enabled"],
+            "swipe_threshold": normalized["touchpad"]["swipe_threshold"],
+        }
+        candidate = validate_config(
+            merge_config(self.config(), {"rumble": normalized["rumble"], "trackpad": candidate_trackpad})
+        )
+        lightbar = LightbarState(**normalized["lightbar"])
+        triggers = TriggerState(
+            left=AdaptiveTriggerEffect(**normalized["triggers"]["left"]),
+            right=AdaptiveTriggerEffect(**normalized["triggers"]["right"]),
+        )
+        sticks = StickCalibration(**normalized["sticks"])
+        gestures = GestureConfig(
+            enabled=normalized["touchpad"]["enabled"],
+            two_finger_scroll=normalized["touchpad"]["two_finger_scroll"],
+            tap_to_click=normalized["touchpad"]["tap_to_click"],
+            swipe_enabled=normalized["touchpad"]["swipe_enabled"],
+            swipe_threshold=normalized["touchpad"]["swipe_threshold"],
+        )
+        unsupported: list[str] = []
+        with self._lab_lock:
+            try:
+                self._trigger_preview.reset(status="profile_apply")
+            except DS5ForgeError as exc:
+                self._record_error(exc)
+                raise
+            current_state = self.snapshot()
+            capabilities = current_state.capabilities
+            connected = current_state.connection == ConnectionState.CONNECTED
+            try:
+                if connected and _capability_enabled(capabilities, "lightbar"):
+                    self.controller.set_lightbar(lightbar)
+                else:
+                    unsupported.append("lightbar")
+                if connected and _capability_enabled(capabilities, "adaptive_triggers"):
+                    self.controller.set_triggers(triggers)
+                else:
+                    unsupported.append("triggers")
+            except DS5ForgeError as exc:
+                # A profile is an atomic command from the user's point of
+                # view. If a later supported output fails, return every
+                # output touched by this attempt to a neutral state before
+                # surfacing the typed error, and keep the authoritative
+                # snapshot aligned with the hardware that was reset.
+                lightbar_reset = self._best_effort_reset_lightbar()
+                triggers_reset = self._best_effort_reset_triggers()
+                neutral: dict[str, Any] = {}
+                if lightbar_reset:
+                    neutral["lightbar"] = LightbarState()
+                if triggers_reset:
+                    neutral["triggers"] = TriggerState()
+                if neutral:
+                    self.store.update(**neutral)
+                self._record_error(exc)
+                raise
+            self.update_config({"rumble": candidate["rumble"], "trackpad": candidate["trackpad"]}, persist=False)
+            snapshot = self.store.update(
+                active_profile=profile_name,
+                lightbar=lightbar if "lightbar" not in unsupported else self.snapshot().lightbar,
+                triggers=triggers if "triggers" not in unsupported else TriggerState(),
+                stick_calibration=sticks,
+                gesture_config=gestures,
+            )
+            payload = {
+                "name": profile_name,
+                "source": "applied",
+                "config": candidate,
+                "unsupported_sections": unsupported,
+            }
+            self.store.publish(EventType.PROFILE.value, payload)
+            return {
+                "config": candidate,
+                "profile": profile_name,
+                "unsupported_sections": unsupported,
+                "state": snapshot.to_dict(),
+            }
 
     def save_profile(self, name: str, profile: dict[str, Any] | None = None) -> dict[str, Any]:
         with self._config_lock:
@@ -247,6 +591,38 @@ class CoreFacade:
         saved = self.config_repository.save_profile(name, payload)
         self.store.publish(EventType.PROFILE.value, {"name": name, "source": "user", "saved": True})
         return saved
+
+    def save_controller_profile(
+        self,
+        name: str,
+        profile: dict[str, Any] | None = None,
+        *,
+        confirm_overwrite: bool = False,
+    ) -> dict[str, Any]:
+        payload = profile if profile is not None else self.controller_profile(name)
+        saved = self.config_repository.save_controller_profile(name, payload, overwrite=confirm_overwrite)
+        self.store.publish(
+            EventType.PROFILE.value, {"name": name, "source": "user", "saved": True, "schema_version": 2}
+        )
+        return saved
+
+    def export_profile(self, name: str) -> dict[str, Any]:
+        return self.config_repository.load_controller_profile(name)
+
+    def import_profile(
+        self,
+        content: str,
+        *,
+        name: str | None = None,
+        confirm_overwrite: bool = False,
+    ) -> dict[str, Any]:
+        imported = self.config_repository.import_controller_profile(
+            content,
+            name=name,
+            overwrite=confirm_overwrite,
+        )
+        self.store.publish(EventType.PROFILE.value, {"name": imported["name"], "source": "imported", "saved": True})
+        return imported
 
     def delete_profile(self, name: str) -> None:
         self.config_repository.delete_profile(name)
@@ -302,7 +678,20 @@ class CoreFacade:
                 last_error = None
             elif error is not None:
                 last_error = error
-            return replace(current, connection=notification.state, health=next_health, last_error=last_error)
+            capabilities = (
+                current.capabilities
+                if notification.state == ConnectionState.CONNECTED
+                else ControllerCapabilities.unavailable(
+                    "No connected USB controller is available; reconnect to detect capabilities."
+                )
+            )
+            return replace(
+                current,
+                connection=notification.state,
+                capabilities=capabilities,
+                health=next_health,
+                last_error=last_error,
+            )
 
         self.store.mutate(updater)
         self.store.publish(
@@ -314,6 +703,15 @@ class CoreFacade:
         )
 
     def _on_connected(self, adapter: ControllerAdapter) -> None:
+        self._disconnecting = False
+        # Reconnects begin from a known neutral trigger/output state. The
+        # adapter is still owned by ControllerService at this point.
+        try:
+            self._trigger_preview.reset(status="reconnect")
+        except DS5ForgeError as exc:
+            self._record_error(exc)
+        self._best_effort_reset_triggers()
+        self._telemetry.reset()
         self.touchpad.set_enabled(self.snapshot().touchpad_enabled)
         self._stop_haptics()
         self._haptics = HapticsService(
@@ -326,16 +724,41 @@ class CoreFacade:
             on_error=self._record_error,
         )
         self._haptics.start()
+        lightbar = self.snapshot().lightbar
+        getter = getattr(adapter, "get_lightbar", None)
+        if callable(getter):
+            try:
+                candidate = getter()
+                if isinstance(candidate, LightbarState):
+                    lightbar = candidate
+            except Exception as exc:
+                LOGGER.warning(
+                    "lightbar state could not be read", extra={"event": "controller.lightbar_read", "error": str(exc)}
+                )
         self.store.mutate(
             lambda current: replace(
                 current,
                 identity=adapter.identity,
                 capabilities=adapter.capabilities,
+                motors=MotorSnapshot(),
+                input=ControllerInput(),
+                telemetry=ControllerTelemetry(),
+                lightbar=lightbar,
+                triggers=TriggerState(),
+                haptics_test=None,
                 health=replace(current.health, subsystems={**current.health.subsystems, "audio": "starting"}),
             )
         )
 
     def _on_disconnected(self) -> None:
+        self._disconnecting = True
+        try:
+            self._trigger_preview.reset(status="disconnect")
+        except DS5ForgeError as exc:
+            self._record_error(exc)
+        self._best_effort_reset_triggers()
+        self._telemetry.reset()
+        self._haptics_bench.stop()
         self._stop_haptics()
         self.touchpad.reset()
         self.store.mutate(
@@ -343,6 +766,10 @@ class CoreFacade:
                 current,
                 identity=None,
                 motors=MotorSnapshot(),
+                input=ControllerInput(),
+                telemetry=ControllerTelemetry(),
+                triggers=TriggerState(),
+                haptics_test=None,
                 audio=AudioSnapshot(status="stopped"),
                 health=replace(current.health, subsystems={**current.health.subsystems, "audio": "stopped"}),
             )
@@ -351,9 +778,23 @@ class CoreFacade:
     def _on_reading(self, reading: Any) -> None:
         # Touch/button input needs the upstream 250 Hz cadence, while battery
         # telemetry should only publish when it actually changes.
+        reading = normalize_controller_reading(reading)
         self.touchpad.handle(reading.input)
+        # A completely empty compatibility reading is already represented by
+        # the initial snapshot. Avoid turning legacy battery-only callbacks
+        # into a state event while still publishing the first meaningful lab
+        # sample immediately.
+        if reading.input != ControllerInput() or self._telemetry.latest is not None:
+            self._telemetry.offer(reading.input, timestamp=reading.timestamp if reading.timestamp > 0 else None)
         if reading.battery != self.snapshot().battery:
             self.store.update(battery=reading.battery)
+
+    def _on_telemetry(self, telemetry: ControllerTelemetry) -> None:
+        self.store.update(input=telemetry.input, telemetry=telemetry)
+        self.store.publish(
+            EventType.CONTROLLER_INPUT.value,
+            {"input": telemetry.input, "telemetry": telemetry},
+        )
 
     def _on_motors(self, left: int, right: int) -> None:
         self.store.update(motors=MotorSnapshot(left, right))
@@ -408,3 +849,155 @@ class CoreFacade:
         haptics, self._haptics = self._haptics, None
         if haptics is not None:
             haptics.stop()
+
+    def _apply_trigger_hardware(self, state: TriggerState) -> None:
+        self.controller.set_triggers(state)
+
+    def _reset_trigger_hardware(self) -> None:
+        if not _capability_enabled(self._active_capabilities(), "adaptive_triggers"):
+            return
+        self.controller.reset_triggers()
+
+    def _best_effort_reset_triggers(self) -> bool:
+        if not _capability_enabled(self._active_capabilities(), "adaptive_triggers"):
+            return False
+        try:
+            self._reset_trigger_hardware()
+        except DS5ForgeError as exc:
+            LOGGER.error(
+                "best-effort trigger reset failed",
+                extra={"event": "controller.trigger_reset", "error_code": exc.code.value},
+            )
+            return False
+        return True
+
+    def _best_effort_preview_reset(self, *, status: str) -> None:
+        try:
+            self._trigger_preview.reset(status=status)
+        except DS5ForgeError as exc:
+            self._record_error(exc)
+
+    def _best_effort_reset_lightbar(self) -> bool:
+        if not _capability_enabled(self._active_capabilities(), "lightbar"):
+            return False
+        try:
+            self.controller.reset_lightbar()
+        except DS5ForgeError as exc:
+            LOGGER.error(
+                "best-effort lightbar reset failed",
+                extra={"event": "controller.lightbar_reset", "error_code": exc.code.value},
+            )
+            return False
+        return True
+
+    def _active_capabilities(self) -> Any:
+        adapter = self.controller.adapter
+        return getattr(adapter, "capabilities", self.snapshot().capabilities)
+
+    def _on_trigger_preview(self, preview: TriggerPreviewState) -> None:
+        with self._lab_lock:
+            if preview.status == "running":
+                triggers = replace(self._preview_effect, preview=preview)
+            else:
+                triggers = TriggerState(preview=preview)
+            snapshot = self.store.update(triggers=triggers)
+            self.store.publish(
+                EventType.LAB.value,
+                {"kind": "triggers.preview", "preview": preview, "state": snapshot.to_dict()["triggers"]},
+            )
+
+    def _on_haptics_test(self, run: HapticsTestRun) -> None:
+        with self._lab_lock:
+            self.store.update(haptics_test=run)
+            self.store.publish(EventType.LAB.value, {"kind": "haptics.test", "run": run})
+            if run.status != "running":
+                self._restart_haptics_if_ready()
+
+    def _restart_haptics_if_ready(self) -> None:
+        if self._haptics is not None or not self._started or self._disconnecting:
+            return
+        # Audio-driven rumble must stay paused for the whole duration of a bench
+        # run. A duplicate start request is rejected as busy but must not resume
+        # audio output while the existing run is still active.
+        active_run = self._haptics_bench.run
+        if active_run is not None and active_run.status == "running":
+            return
+        if self.snapshot().connection != ConnectionState.CONNECTED:
+            return
+        self._haptics = HapticsService(
+            self.controller.set_motors,
+            lambda: self._section("rumble"),
+            lambda: self.snapshot().rumble_enabled,
+            capture_factory=self._capture_factory,
+            reload_event=self._reload_audio,
+            on_audio=self._on_audio,
+            on_error=self._record_error,
+        )
+        self._haptics.start()
+
+    @staticmethod
+    def _gesture_from_config(config: dict[str, Any]) -> GestureConfig:
+        trackpad = config.get("trackpad", {})
+        return GestureConfig(
+            enabled=bool(trackpad.get("gestures_enabled", True)),
+            two_finger_scroll=bool(trackpad.get("two_finger_scroll", True)),
+            tap_to_click=bool(trackpad.get("tap_to_click", True)),
+            swipe_enabled=bool(trackpad.get("swipe_enabled", True)),
+            swipe_threshold=float(trackpad.get("swipe_threshold", 40.0)),
+        )
+
+
+def _validate_lightbar_state(state: LightbarState) -> None:
+    if not isinstance(state, LightbarState):
+        raise ConfigValidationError(fields={"lightbar": "must be a LightbarState"})
+    if any(
+        not isinstance(getattr(state, key), int) or isinstance(getattr(state, key), bool) for key in ("r", "g", "b")
+    ):
+        raise ConfigValidationError(fields={"lightbar": "color channels must be integers"})
+    if not all(0 <= getattr(state, key) <= 255 for key in ("r", "g", "b")):
+        raise ConfigValidationError(fields={"lightbar": "color channels must be between 0 and 255"})
+    if (
+        not isinstance(state.enabled, bool)
+        or not isinstance(state.brightness, int)
+        or isinstance(state.brightness, bool)
+    ):
+        raise ConfigValidationError(fields={"lightbar": "enabled and brightness have invalid types"})
+    if not 0 <= state.brightness <= 2 or state.pulse not in {"off", "slow", "fast"}:
+        raise ConfigValidationError(fields={"lightbar": "brightness or pulse is invalid"})
+
+
+def _capability_enabled(capabilities: Any, name: str) -> bool:
+    availability = getattr(capabilities, "availability", {}).get(name)
+    if availability is not None:
+        return bool(getattr(availability, "enabled", False))
+    return bool(getattr(capabilities, name, False))
+
+
+def _validate_trigger_state(state: TriggerState) -> None:
+    if not isinstance(state, TriggerState):
+        raise ConfigValidationError(fields={"triggers": "must be a TriggerState"})
+    for side, effect in (("left", state.left), ("right", state.right)):
+        if not isinstance(effect.mode, str) or effect.mode not in {"off", "resistance", "pulse", "rigid"}:
+            raise ConfigValidationError(fields={f"triggers.{side}.mode": "unsupported trigger mode"})
+        for key in ("start_position", "end_position", "force", "frequency", "amplitude"):
+            value = getattr(effect, key)
+            if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 255:
+                raise ConfigValidationError(fields={f"triggers.{side}.{key}": "must be an integer between 0 and 255"})
+        if effect.start_position > effect.end_position:
+            raise ConfigValidationError(fields={f"triggers.{side}.start_position": "must not exceed end_position"})
+
+
+def _validate_stick_calibration(calibration: StickCalibration) -> None:
+    if not isinstance(calibration, StickCalibration):
+        raise ConfigValidationError(fields={"sticks": "must be a StickCalibration"})
+    for key in (
+        "left_deadzone",
+        "right_deadzone",
+        "left_center_x",
+        "left_center_y",
+        "right_center_x",
+        "right_center_y",
+    ):
+        value = getattr(calibration, key)
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise ConfigValidationError(fields={f"sticks.{key}": "must be a finite number"})

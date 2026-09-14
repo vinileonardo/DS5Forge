@@ -35,6 +35,13 @@ tests. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
 [`docs/API.md`](docs/API.md), [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) and
 [`CHANGELOG.md`](CHANGELOG.md).
 
+P2 adds the browser Controller Lab at `/controller`. Its Input, Triggers,
+Lighting and Sticks tabs consume normalized snapshots and versioned commands;
+the Python core remains the only owner of DualSense hardware. Adaptive
+triggers and optional lightbar controls are capability-gated from the
+installed Windows adapter surface, and every preview/test output has a
+server-owned stop or timeout path.
+
 ## DS5Companion original vs. DS5Forge P0
 
 DS5Forge P0 starts from the upstream snapshot recorded in `UPSTREAM.md`
@@ -66,9 +73,9 @@ that later sprints can extend safely.
 
 P0 is not a haptics-quality or game-feature sprint. The audio-driven rumble
 mapping, filter/envelope tuning, touch gestures and microphone-button feedback
-are intentionally kept close to the upstream behavior. Adaptive-trigger labs,
-lightbar tooling, game detection, auto-profiles, virtual/XInput compatibility
-and broader remapping belong to later sprints.
+are intentionally kept close to the upstream behavior. Game detection,
+auto-profiles, virtual/XInput compatibility and broader remapping belong to
+later sprints; P2's profile and Controller Lab features do not add them.
 
 That means the biggest P0 benefit during normal play should be **reliability**,
 not a dramatically different controller feel: cleaner reconnect behavior,
@@ -77,7 +84,7 @@ validated configuration and better recovery/diagnostics when audio or hardware
 fails. Physical Windows + DualSense USB validation is still required before we
 claim regression-free hardware behavior.
 
-## P1 developer setup
+## P2 developer setup
 
 Python 3.12.x is the required P0 development/build runtime:
 
@@ -89,8 +96,10 @@ pytest
 
 Run the retained GUI with `python source/run.py`, or run the same core/API
 without a GUI with `python source/run.py --headless`. The P0 API is strictly
-loopback-only (`127.0.0.1`, `::1` or `localhost`). Physical USB validation remains recorded separately as
-`HARDWARE VALIDATION PENDING` until the Windows checklist is executed.
+loopback-only (`127.0.0.1`, `::1` or `localhost`). Physical USB validation
+remains recorded separately as `HARDWARE VALIDATION PENDING` until the Windows
+checklist is executed. See [`docs/P2_VALIDATION.md`](docs/P2_VALIDATION.md) for
+the split automated and physical evidence gate.
 
 P1 makes the browser/Tauri SPA the primary presentation path while keeping the
 `customtkinter` GUI as a fallback. In two terminals, start the headless core
@@ -103,10 +112,10 @@ npm ci
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. The frontend talks only to the local P0 HTTP
-and WebSocket contracts; it never receives a controller object or Windows API
-handle. P1 does not bundle the Python core and does not add an installer, tray,
-updater or autostart path.
+Open `http://127.0.0.1:5173`. The frontend talks only to the local versioned
+HTTP/WebSocket contracts; it never receives a controller object or Windows API
+handle. P2's Controller Lab uses the same local authority and does not bundle
+the Python core or add an installer, tray, updater or autostart path.
 
 ### Optional native Tauri development on Windows
 

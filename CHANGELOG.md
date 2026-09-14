@@ -4,6 +4,49 @@ All notable changes to DS5Forge will be documented in this file.
 
 The project currently evolves from the upstream `Casliyan/DS5companion` baseline recorded in `UPSTREAM.md`.
 
+## Unreleased — P2 Controller Lab / DualSense Depth — 2026-09-14
+
+### Added
+
+- Controller Lab at `/controller` with Input, Triggers, Lighting and Sticks tabs.
+- Complete normalized button, trigger, stick and touch telemetry with bounded
+  latest-value WebSocket publication at approximately 30 Hz over the core's
+  250 Hz USB read cadence.
+- Capability-aware lightbar and adaptive-trigger contracts, server-TTL trigger
+  previews, single-flight haptics test bench and DS5Forge-only stick metadata.
+- Schema-v2 full controller profiles with legacy rumble-only migration,
+  atomic writes, strict browser import/export and explicit overwrite confirmation.
+- Python, frontend and facade safety tests for normalization, capability
+  gating, bounded queues, neutralization, profile rejection and stale UI state.
+
+### Changed
+
+- Touchpad settings now expose gesture controls and the Controller Lab shows
+  live touch points/button state while preserving core-owned mouse behavior.
+- Adapter/library capability detection disables unsupported output paths and
+  returns structured reasons instead of assuming published optional surfaces.
+
+### Fixed
+
+- Realtime trust now stays stale while the WebSocket transport is online but the
+  latest validated snapshot reports a disconnected controller, and command
+  responses no longer force `stale: false` for a disconnected runtime.
+- Haptics, Touchpad and Settings drafts preserve unsaved edits across config
+  refresh/reconnect and rejected saves by syncing from config only when the
+  draft is not dirty, avoiding update/save effect loops.
+- Runtime capability counting ignores the `availability` object, and profile
+  overwrite confirmation uses task-specific busy wording instead of delete
+  wording.
+
+### Safety and scope
+
+- Trigger previews and haptics tests always have bounded stop paths; disconnect,
+  reconnect, profile apply, adapter failure and shutdown attempt neutral output.
+- P2 remains USB/wired only. No Bluetooth, wireless transport/pairing, virtual
+  controller, game detection, remapping or compatibility layer was added.
+- Physical Windows + wired DualSense evidence remains
+  `HARDWARE VALIDATION PENDING`; no final hardware GO is declared.
+
 ## Unreleased — P1 PC-first UX / Web + Desktop — 2026-09-14
 
 ### Added

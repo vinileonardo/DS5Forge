@@ -16,6 +16,7 @@ import {
 import { TRACKPAD_FIELD_SPECS, type TrackpadConfig } from "../../lib/api/contracts";
 import { ApiError, fieldErrorMap } from "../../lib/api/errors";
 import { useRuntime } from "../../lib/runtime/RuntimeProvider";
+import { TouchSurfaceVisualizer } from "../controller/visualizers";
 
 export function TouchpadPage() {
   const { config, runtime, coreStatus, stale, canControl, updateConfig, setTouchpad } = useRuntime();
@@ -26,14 +27,14 @@ export function TouchpadPage() {
   const [error, setError] = useState<unknown>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
-  useEffect(() => {
-    if (config && !saving) setDraft(config.trackpad);
-  }, [config, saving]);
-
   const dirty = useMemo(
     () => Boolean(config && draft && JSON.stringify(config.trackpad) !== JSON.stringify(draft)),
     [config, draft],
   );
+
+  useEffect(() => {
+    if (config && !dirty) setDraft(config.trackpad);
+  }, [config, dirty]);
 
   if (!config || !draft) {
     return coreStatus === "online" ? (
@@ -68,7 +69,8 @@ export function TouchpadPage() {
     setMessage(null);
     setFieldErrors({});
     try {
-      await updateConfig({ trackpad: currentDraft });
+      const saved = await updateConfig({ trackpad: currentDraft });
+      setDraft(saved.trackpad);
       setMessage("Touchpad configuration saved.");
     } catch (reason) {
       setError(reason);
@@ -97,7 +99,7 @@ export function TouchpadPage() {
       <PageHeader
         eyebrow="Pointer and gestures"
         title="Touchpad"
-        description="Configure the current DualSense touchpad-to-Windows mouse behavior. Gesture editing and raw touch visualization remain out of scope for P1."
+        description="Configure the current DualSense touchpad-to-Windows mouse behavior and the gesture settings used by the core."
       />
       {coreStatus !== "online" && (
         <Notice tone="warning" title="Core unavailable">
@@ -111,6 +113,36 @@ export function TouchpadPage() {
       )}
       <ErrorText error={error} />
       <div className="stack">
+        <Card>
+          <div className="card-header">
+            <div>
+              <h2>Live touch input</h2>
+              <p>
+                Points and the touchpad button are read by the core and shown at the bounded telemetry rate.
+              </p>
+            </div>
+            <TouchpadIcon size={18} color="var(--accent)" />
+          </div>
+          {runtime?.input ? (
+            <>
+              <TouchSurfaceVisualizer points={[runtime.input.touch0, runtime.input.touch1]} />
+              <dl className="data-list lab-data-list">
+                <div className="data-item">
+                  <dt>Touchpad button</dt>
+                  <dd className={runtime.input.touchpad_button ? "good" : ""}>
+                    {runtime.input.touchpad_button ? "Pressed" : "Released"}
+                  </dd>
+                </div>
+                <div className="data-item">
+                  <dt>State freshness</dt>
+                  <dd>{stale ? "Stale" : "Live"}</dd>
+                </div>
+              </dl>
+            </>
+          ) : (
+            <p className="muted">Waiting for a validated controller input snapshot.</p>
+          )}
+        </Card>
         <Card>
           <div className="card-header">
             <div>
@@ -182,6 +214,47 @@ export function TouchpadPage() {
                 checked={draft.tap_to_click}
                 disabled={coreStatus !== "online" || saving}
                 onChange={(value) => change("tap_to_click", value)}
+              />
+            </Field>
+            <Field
+              label="Gestures"
+              help="Gesture interpretation is performed by the Python core; this only changes its validated configuration."
+            >
+              <Toggle
+                label="Enable gestures"
+                description="Allow gesture actions in the current touchpad session."
+                checked={draft.gestures_enabled}
+                disabled={coreStatus !== "online" || saving}
+                onChange={(value) => change("gestures_enabled", value)}
+              />
+              <Toggle
+                label="Two-finger scroll"
+                description="Keep semantic vertical and horizontal scroll output."
+                checked={draft.two_finger_scroll}
+                disabled={coreStatus !== "online" || saving}
+                onChange={(value) => change("two_finger_scroll", value)}
+              />
+              <Toggle
+                label="Swipe gestures"
+                description="Enable configured swipe interpretation when supported by the core."
+                checked={draft.swipe_enabled}
+                disabled={coreStatus !== "online" || saving}
+                onChange={(value) => change("swipe_enabled", value)}
+              />
+            </Field>
+            <Field
+              label="Swipe threshold"
+              help="Minimum movement in touchpad coordinates before a swipe is recognized (1–500)."
+              error={fieldErrors.swipe_threshold || fieldErrors["trackpad.swipe_threshold"]}
+            >
+              <NumberInput
+                aria-label="Swipe threshold"
+                value={draft.swipe_threshold}
+                min={1}
+                max={500}
+                step={1}
+                disabled={coreStatus !== "online" || saving}
+                onChange={(event) => change("swipe_threshold", event.target.value)}
               />
             </Field>
           </div>

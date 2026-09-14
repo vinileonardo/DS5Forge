@@ -3,6 +3,11 @@ import { z } from "zod";
 import {
   ConfigSchema,
   type ConfigPatch,
+  ControllerTelemetrySchema,
+  FullControllerProfileSchema,
+  GestureConfigSchema,
+  HapticsTestRunSchema,
+  LightbarSchema,
   DeleteProfileResponseSchema,
   HealthResponseSchema,
   ProfileLoadResponseSchema,
@@ -10,8 +15,17 @@ import {
   ProfilesResponseSchema,
   RumbleTestResponseSchema,
   RuntimeStateSchema,
+  StickCalibrationSchema,
+  TriggerPreviewSchema,
+  TriggerStateSchema,
+  type ControllerProfile,
+  type ControllerTelemetry,
+  type GestureConfig,
+  type LightbarState,
   type RumbleConfig,
   type RuntimeState,
+  type StickCalibration,
+  type TriggerEffect,
 } from "./contracts";
 import { ApiError, ApiProtocolError } from "./errors";
 
@@ -56,7 +70,11 @@ async function readBody(response: Response): Promise<unknown> {
   }
 }
 
-async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit): Promise<T> {
+async function request<T>(
+  path: string,
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
+  init?: RequestInit,
+): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
@@ -89,6 +107,11 @@ async function request<T>(path: string, schema: z.ZodType<T>, init?: RequestInit
 }
 
 const json = (value: unknown): RequestInit => ({ method: "PATCH", body: JSON.stringify(value) });
+const jsonPut = (value: unknown): RequestInit => ({ method: "PUT", body: JSON.stringify(value) });
+const jsonPost = (value?: unknown): RequestInit => ({
+  method: "POST",
+  ...(value === undefined ? {} : { body: JSON.stringify(value) }),
+});
 
 export const api = {
   health: () => request("/health", HealthResponseSchema),
@@ -122,6 +145,58 @@ export const api = {
     request("/commands/rumble/test", RumbleTestResponseSchema, {
       method: "POST",
       body: JSON.stringify(payload),
+      headers: { "Content-Type": "application/json" },
+    }),
+  controllerTelemetry: () => request<ControllerTelemetry>("/controller/telemetry", ControllerTelemetrySchema),
+  lightbar: () => request<LightbarState>("/controller/lightbar", LightbarSchema),
+  applyLightbar: (state: LightbarState) =>
+    request("/controller/lightbar", LightbarSchema, {
+      ...jsonPut(state),
+      headers: { "Content-Type": "application/json" },
+    }),
+  resetLightbar: () => request("/controller/lightbar/reset", LightbarSchema, jsonPost()),
+  triggers: () => request("/controller/triggers", TriggerStateSchema),
+  applyTriggers: (state: { left: TriggerEffect; right: TriggerEffect }) =>
+    request("/controller/triggers", TriggerStateSchema, {
+      ...jsonPut(state),
+      headers: { "Content-Type": "application/json" },
+    }),
+  previewTriggers: (state: { left: TriggerEffect; right: TriggerEffect; duration_ms: number }) =>
+    request("/controller/triggers/preview", TriggerPreviewSchema, {
+      ...jsonPost(state),
+      headers: { "Content-Type": "application/json" },
+    }),
+  cancelTriggerPreview: () =>
+    request("/controller/triggers/preview", TriggerPreviewSchema.nullable(), { method: "DELETE" }),
+  resetTriggers: () => request("/controller/triggers/reset", TriggerStateSchema, jsonPost()),
+  startHapticsTest: (payload: { left: number; right: number; duration_ms: number }) =>
+    request("/controller/haptics/test", HapticsTestRunSchema, {
+      ...jsonPost(payload),
+      headers: { "Content-Type": "application/json" },
+    }),
+  cancelHapticsTest: () =>
+    request("/controller/haptics/test", HapticsTestRunSchema.nullable(), { method: "DELETE" }),
+  stickCalibration: () => request("/controller/sticks/calibration", StickCalibrationSchema),
+  updateStickCalibration: (calibration: StickCalibration) =>
+    request("/controller/sticks/calibration", StickCalibrationSchema, {
+      ...jsonPut(calibration),
+      headers: { "Content-Type": "application/json" },
+    }),
+  gestures: () => request("/controller/gestures", GestureConfigSchema),
+  updateGestures: (patch: Partial<GestureConfig>) =>
+    request("/controller/gestures", GestureConfigSchema, {
+      ...json({ ...patch }),
+      headers: { "Content-Type": "application/json" },
+    }),
+  getProfile: (name: string) => request(`/profiles/${encodeURIComponent(name)}`, FullControllerProfileSchema),
+  saveControllerProfile: (name: string, profile: ControllerProfile, confirmOverwrite = false) =>
+    request(`/profiles/${encodeURIComponent(name)}`, ProfileSaveResponseSchema, {
+      ...jsonPut({ ...profile, name, confirm_overwrite: confirmOverwrite }),
+      headers: { "Content-Type": "application/json" },
+    }),
+  importProfile: (content: string, name?: string, confirmOverwrite = false) =>
+    request("/profiles/import", FullControllerProfileSchema, {
+      ...jsonPost({ content, ...(name ? { name } : {}), confirm_overwrite: confirmOverwrite }),
       headers: { "Content-Type": "application/json" },
     }),
 };

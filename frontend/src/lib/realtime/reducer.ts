@@ -47,6 +47,36 @@ export function applyRuntimeEvent(projection: RuntimeProjection, event: RuntimeE
         ...projection,
         runtime: projection.runtime ? updateAudio(projection.runtime, event.payload) : projection.runtime,
       };
+    case "controller.input":
+      return {
+        ...projection,
+        runtime: projection.runtime
+          ? {
+              ...projection.runtime,
+              input: event.payload.input,
+              telemetry: event.payload.telemetry,
+            }
+          : projection.runtime,
+      };
+    case "controller.lab":
+      if (!projection.runtime) return projection;
+      if (event.payload.kind === "lightbar.applied" || event.payload.kind === "lightbar.reset") {
+        return { ...projection, runtime: { ...projection.runtime, lightbar: event.payload.state } };
+      }
+      if (
+        event.payload.kind === "triggers.applied" ||
+        event.payload.kind === "triggers.reset" ||
+        event.payload.kind === "triggers.preview"
+      ) {
+        return { ...projection, runtime: { ...projection.runtime, triggers: event.payload.state } };
+      }
+      if (event.payload.kind === "haptics.test") {
+        return { ...projection, runtime: { ...projection.runtime, haptics_test: event.payload.run } };
+      }
+      if (event.payload.kind === "sticks.calibration_changed") {
+        return { ...projection, runtime: { ...projection.runtime, stick_calibration: event.payload.state } };
+      }
+      return projection;
     case "profile.changed":
     case "diagnostic":
       return projection;
@@ -89,10 +119,14 @@ function eventSummary(event: RuntimeEvent): string {
       return `Controller lifecycle: ${event.payload.state}`;
     case "audio.status":
       return `Audio capture: ${event.payload.status}`;
+    case "controller.input":
+      return `Controller input sample ${event.payload.telemetry.sequence}`;
     case "config.changed":
       return "Configuration updated by the core";
     case "profile.changed":
       return `Profile event${typeof event.payload.name === "string" ? `: ${event.payload.name}` : ""}`;
+    case "controller.lab":
+      return `Controller Lab event${typeof event.payload.kind === "string" ? `: ${event.payload.kind}` : ""}`;
     case "diagnostic":
       return "Core diagnostic event";
   }

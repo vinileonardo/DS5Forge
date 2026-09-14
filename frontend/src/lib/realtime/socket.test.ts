@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { RuntimeState } from "../api/contracts";
 import type { ApiProtocolError } from "../api/errors";
-import { RealtimeSocket, type WebSocketLike } from "./socket";
+import { RealtimeSocket, parseSocketMessage, type WebSocketLike } from "./socket";
 
 const runtime = {
   connection: "disconnected",
@@ -27,6 +27,34 @@ const runtime = {
   sequence: 0,
   updated_at: 0,
 } satisfies RuntimeState;
+
+const input = {
+  square: false,
+  triangle: false,
+  circle: false,
+  cross: true,
+  dpad_up: false,
+  dpad_down: false,
+  dpad_left: false,
+  dpad_right: false,
+  l1: false,
+  r1: false,
+  l2_button: false,
+  r2_button: false,
+  l3: false,
+  r3: false,
+  options: false,
+  share: false,
+  ps: false,
+  mic_button: false,
+  touchpad_button: false,
+  l2: 0.5,
+  r2: 0,
+  sticks: { left_x: 0.1, left_y: 0, right_x: 0, right_y: -0.1 },
+  touch0: { active: false, x: 0, y: 0 },
+  touch1: { active: false, x: 0, y: 0 },
+  buttons: { cross: true },
+};
 
 class FakeSocket implements WebSocketLike {
   binaryType: BinaryType = "blob";
@@ -67,6 +95,58 @@ describe("realtime WebSocket client", () => {
     expect(readyStates).toEqual([false]);
     expect(unknown).toEqual(["future.event"]);
     client.close();
+  });
+
+  it("parses the bounded controller input event and rejects extra payload fields", () => {
+    const parsed = parseSocketMessage({
+      type: "controller.input",
+      version: 1,
+      payload: { input, telemetry: { input, sequence: 4, timestamp: 2, sample_rate_hz: 30 } },
+    });
+    expect(parsed.kind).toBe("event");
+    if (parsed.kind === "event") expect(parsed.event.type).toBe("controller.input");
+
+    expect(() =>
+      parseSocketMessage({
+        type: "controller.input",
+        version: 1,
+        payload: {
+          input: { ...input, unexpected: true },
+          telemetry: { input, sequence: 4, timestamp: 2, sample_rate_hz: 30 },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("parses known lab events strictly and ignores future lab kinds", () => {
+    const lightbar = {
+      r: 10,
+      g: 20,
+      b: 30,
+      enabled: true,
+      brightness: 2,
+      pulse: "off" as const,
+    };
+    const parsed = parseSocketMessage({
+      type: "controller.lab",
+      version: 1,
+      payload: { kind: "lightbar.applied", state: lightbar },
+    });
+    expect(parsed.kind).toBe("event");
+    expect(
+      parseSocketMessage({
+        type: "controller.lab",
+        version: 1,
+        payload: { kind: "future.lab", state: lightbar },
+      }),
+    ).toEqual({ kind: "unknown", type: "controller.lab" });
+    expect(() =>
+      parseSocketMessage({
+        type: "controller.lab",
+        version: 1,
+        payload: { kind: "lightbar.applied", state: { ...lightbar, extra: true } },
+      }),
+    ).toThrow();
   });
 
   it("rejects a non-snapshot first frame as a protocol error", () => {

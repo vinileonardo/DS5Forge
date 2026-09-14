@@ -10,6 +10,8 @@ from ..domain.models import (
     ControllerCapabilities,
     ControllerIdentity,
     ControllerReading,
+    LightbarState,
+    TriggerState,
 )
 
 
@@ -28,6 +30,20 @@ class ControllerAdapter(Protocol):
     def startup_feedback(self) -> None: ...
 
     def close(self) -> None: ...
+
+
+class ControllerLabAdapter(Protocol):
+    """Optional output surface exposed by a platform controller adapter."""
+
+    def get_lightbar(self) -> LightbarState: ...
+
+    def set_lightbar(self, state: LightbarState) -> None: ...
+
+    def reset_lightbar(self) -> None: ...
+
+    def set_triggers(self, state: TriggerState) -> None: ...
+
+    def reset_triggers(self) -> None: ...
 
 
 class ControllerFactory(Protocol):

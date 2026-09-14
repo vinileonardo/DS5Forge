@@ -95,6 +95,19 @@ class GestureInterpreter:
         # matching the upstream behavior. Touch samples are reset so re-enable
         # cannot turn a stale contact into a click.
         if not trackpad_enabled:
+            if self.prev_pad_click:
+                actions.append(MouseAction("button", left=True, down=False))
+            self.prev_pad_click = False
+            self.prev_active0 = self.prev_active1 = False
+            self.last_x = self.last_y = None
+            self.last2_y = self.last2_x = None
+            self.two_finger_session = False
+            return GestureResult(tuple(actions), mic_target=mic_target)
+
+        if not bool(config.get("gestures_enabled", True)):
+            if self.prev_pad_click:
+                actions.append(MouseAction("button", left=True, down=False))
+            self.prev_pad_click = False
             self.prev_active0 = self.prev_active1 = False
             self.last_x = self.last_y = None
             self.last2_y = self.last2_x = None
@@ -111,7 +124,7 @@ class GestureInterpreter:
             self.two_finger_session = True
             cy = (t0.y + t1.y) / 2.0
             cx = (t0.x + t1.x) / 2.0
-            if self.last2_y is not None and self.last2_x is not None:
+            if bool(config.get("two_finger_scroll", True)) and self.last2_y is not None and self.last2_x is not None:
                 self.scroll_accum_v += (self.last2_y - cy) * float(config["scroll_speed"])
                 self.scroll_accum_h += (cx - self.last2_x) * float(config["scroll_speed"])
                 while abs(self.scroll_accum_v) >= 40:
@@ -150,9 +163,17 @@ class GestureInterpreter:
 
         if self.prev_active0 and not a0 and not a1:
             duration_ms = (now - self.touch_start_t) * 1000
+            # Swipe recognition and tap-to-click are independent settings. The
+            # configured swipe threshold only narrows the tap travel window while
+            # swipe interpretation is enabled; disabling swipe must not disable
+            # tap-to-click.
+            swipe_enabled = bool(config.get("swipe_enabled", True))
+            tap_travel_limit = (
+                float(config.get("swipe_threshold", self.TAP_MAX_MOVE)) if swipe_enabled else float(self.TAP_MAX_MOVE)
+            )
             if (
                 duration_ms < self.TAP_MAX_MS
-                and self.touch_travel < self.TAP_MAX_MOVE
+                and self.touch_travel < tap_travel_limit
                 and config.get("tap_to_click", True)
             ):
                 left = not self.two_finger_session

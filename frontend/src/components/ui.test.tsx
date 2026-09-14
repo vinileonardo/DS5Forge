@@ -56,4 +56,20 @@ describe("accessible shared controls", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
+
+  it("uses a task-specific busy label instead of delete wording", () => {
+    render(
+      <ConfirmDialog
+        title="Overwrite “Night”?"
+        description="This replaces an existing profile."
+        confirmLabel="Overwrite profile"
+        busyLabel="Overwriting…"
+        busy
+        onConfirm={() => undefined}
+        onCancel={() => undefined}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Overwriting…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+  });
 });

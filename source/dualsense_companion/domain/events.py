@@ -11,11 +11,13 @@ from typing import Any
 class EventType(StrEnum):
     STATE_SNAPSHOT = "state.snapshot"
     STATE_UPDATED = "state.updated"
+    CONTROLLER_INPUT = "controller.input"
     LIFECYCLE = "controller.lifecycle"
     AUDIO = "audio.status"
     PROFILE = "profile.changed"
     CONFIG = "config.changed"
     DIAGNOSTIC = "diagnostic"
+    LAB = "controller.lab"
 
 
 @dataclass(frozen=True, slots=True)

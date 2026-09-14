@@ -13,6 +13,7 @@ import {
   Toggle,
 } from "../../components/ui";
 import { controllerLabel, useRuntime } from "../../lib/runtime/RuntimeProvider";
+import { availableCapabilityCount } from "../controller/visualizers";
 
 function connectionTone(connection: string | undefined): "success" | "warning" | "danger" | "neutral" {
   if (connection === "connected") return "success";
@@ -168,9 +169,7 @@ export function OverviewPage() {
             </div>
             <div className="data-item">
               <dt>Capabilities</dt>
-              <dd>
-                {current ? `${Object.values(current.capabilities).filter(Boolean).length} available` : "—"}
-              </dd>
+              <dd>{current ? `${availableCapabilityCount(current)} available` : "—"}</dd>
             </div>
             <div className="data-item">
               <dt>Last update</dt>
