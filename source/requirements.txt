@@ -1,0 +1,4 @@
+numpy
+pydualsense
+PyAudioWPatch
+customtkinter

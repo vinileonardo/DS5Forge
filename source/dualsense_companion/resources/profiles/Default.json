@@ -1,0 +1,18 @@
+{
+  "heavy_cutoff_hz": 150,
+  "texture_center_hz": 300,
+  "fast_attack_ms": 5,
+  "fast_release_ms": 110,
+  "baseline_attack_ms": 350,
+  "baseline_release_ms": 1800,
+  "gate": 0.05,
+  "impact_level": 0.55,
+  "gamma": 2.2,
+  "transient_min_level": 0.22,
+  "transient_gain": 3.0,
+  "transient_weight": 0.6,
+  "drive_gate": 0.06,
+  "texture_gate_mult": 1.4,
+  "min_rumble": 28,
+  "max_rumble": 255
+}

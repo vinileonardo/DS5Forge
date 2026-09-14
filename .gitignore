@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# PyInstaller build output
+source/build_tmp/
+source/dist/
+source/dist_console/
+*.spec.bak
+
+# OS
+Thumbs.db
+Desktop.ini
