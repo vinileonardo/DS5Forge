@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from dualsense_companion.api.origins import DEFAULT_ALLOWED_ORIGINS, validate_allowed_origins, validate_origin
 from dualsense_companion.api.server import validate_loopback_host
 from dualsense_companion.core.config import ConfigRepository
 from dualsense_companion.core.facade import CoreFacade
@@ -72,6 +73,61 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             validate_port(65536)
 
+    def test_frontend_origin_policy_is_explicit_and_local_only(self):
+        self.assertEqual(validate_origin("http://localhost:5173"), "http://localhost:5173")
+        self.assertEqual(validate_origin("http://tauri.localhost"), "http://tauri.localhost")
+        self.assertEqual(validate_allowed_origins(DEFAULT_ALLOWED_ORIGINS), DEFAULT_ALLOWED_ORIGINS)
+        for origin in (
+            "*",
+            "https://example.invalid",
+            "http://localhost:3000",
+            "http://localhost:5173/app",
+            "http://localhost:5173?remote=true",
+        ):
+            with self.assertRaises(ValueError, msg=origin):
+                validate_origin(origin)
+
+    async def test_http_origin_policy_allows_approved_origin_and_blocks_remote_origin(self):
+        import httpx
+
+        transport = httpx.ASGITransport(app=self.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            approved = await client.get(
+                "/api/v1/health",
+                headers={"Origin": "http://localhost:5173"},
+            )
+            self.assertEqual(approved.status_code, 200)
+            self.assertEqual(approved.headers.get("access-control-allow-origin"), "http://localhost:5173")
+
+            preflight = await client.options(
+                "/api/v1/config",
+                headers={
+                    "Origin": "http://localhost:5173",
+                    "Access-Control-Request-Method": "PATCH",
+                    "Access-Control-Request-Headers": "content-type",
+                },
+            )
+            self.assertEqual(preflight.status_code, 200)
+            self.assertEqual(preflight.headers.get("access-control-allow-origin"), "http://localhost:5173")
+
+            rejected = await client.get(
+                "/api/v1/health",
+                headers={"Origin": "https://example.invalid"},
+            )
+            self.assertEqual(rejected.status_code, 403)
+            self.assertEqual(rejected.json()["error"]["code"], "api.origin_rejected")
+            self.assertNotIn("access-control-allow-origin", rejected.headers)
+
+            # CORS alone would not prevent a malicious browser from sending a
+            # simple cross-origin POST. The origin guard must reject it before
+            # a state-changing endpoint reaches the facade.
+            blocked_command = await client.post(
+                "/api/v1/profiles/Heavy%20Impacts/load",
+                headers={"Origin": "https://example.invalid", "Content-Type": "text/plain"},
+            )
+            self.assertEqual(blocked_command.status_code, 403)
+            self.assertEqual(self.facade.snapshot().active_profile, "Default")
+
     def test_openapi_exposes_typed_request_contracts(self):
         schema = self.app.openapi()
         config_patch = schema["paths"]["/api/v1/config"]["patch"]["requestBody"]["content"]["application/json"][
@@ -96,6 +152,8 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("connection", state.json())
             invalid = await client.patch("/api/v1/config", json={"rumble": {"gate": "bad"}})
             self.assertEqual(invalid.status_code, 422)
+            self.assertEqual(invalid.json()["error"]["code"], "api.validation")
+            self.assertIn("rumble.gate", invalid.json()["error"]["fields"])
             numeric_string = await client.patch("/api/v1/config", json={"rumble": {"gate": "0.1"}})
             self.assertEqual(numeric_string.status_code, 422)
             unknown = await client.patch("/api/v1/config", json={"unexpected": True})
@@ -215,6 +273,36 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         await incoming.put({"type": "websocket.connect"})
         await asyncio.wait_for(task, timeout=1)
         self.assertTrue(any(item["type"] == "websocket.close" and item["code"] == 1008 for item in sent))
+
+    async def test_websocket_accepts_approved_browser_origin(self):
+        scope = {
+            "type": "websocket",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "scheme": "ws",
+            "path": "/api/v1/ws",
+            "raw_path": b"/api/v1/ws",
+            "query_string": b"",
+            "headers": [(b"origin", b"http://127.0.0.1:5173")],
+            "client": ("test", 1),
+            "server": ("test", 80),
+            "subprotocols": [],
+        }
+        incoming = asyncio.Queue()
+        sent = []
+
+        async def receive():
+            return await incoming.get()
+
+        async def send(message):
+            sent.append(message)
+
+        task = asyncio.create_task(self.app(scope, receive, send))
+        await incoming.put({"type": "websocket.connect"})
+        await asyncio.sleep(0.02)
+        await incoming.put({"type": "websocket.disconnect", "code": 1000})
+        await asyncio.wait_for(task, timeout=1)
+        self.assertTrue(any(item["type"] == "websocket.accept" for item in sent))
 
 
 if __name__ == "__main__":

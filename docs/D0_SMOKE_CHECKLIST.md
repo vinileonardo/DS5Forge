@@ -90,3 +90,18 @@ P0 não deve alegar regressão zero do baseline sem este checklist ou testes aut
 - [x] shutdown deixa threads, motores e botões sintéticos em estado neutro nos testes automatizados/fakes;
 - [x] Windows + DualSense USB físico permanece explicitamente como `HARDWARE VALIDATION PENDING`;
 - [x] auditoria de código confirma que P0 não adicionou Bluetooth/wireless.
+
+## Registro P1 — browser/Tauri
+
+Estas verificações cobrem a nova apresentação e não substituem a validação
+física Windows + DualSense USB acima.
+
+- [ ] iniciar `python source/run.py --headless` e `npm run dev` em terminais separados;
+- [ ] abrir `http://127.0.0.1:5173` e confirmar Overview, status do core e estado do controller;
+- [ ] confirmar que core offline aparece como offline/reconnecting e recupera sem reload;
+- [ ] confirmar que Overview, Haptics, Touchpad, Profiles, Diagnostics e Settings são navegáveis por teclado;
+- [ ] confirmar que Haptics/Touchpad aguardam confirmação do core e exibem 422 estruturado;
+- [ ] confirmar que perfis bundled são read-only e exclusão user exige confirmação;
+- [ ] confirmar que o preview do frontend e o Tauri usam a mesma SPA;
+- [ ] confirmar que origins remotas, wildcard CORS e bind externo são rejeitados;
+- [ ] confirmar que nenhum recurso P2/P3/P4 ou Bluetooth/wireless aparece como caminho ativo.

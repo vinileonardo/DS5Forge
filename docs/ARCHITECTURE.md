@@ -1,4 +1,4 @@
-# DS5Forge P0 architecture
+# DS5Forge architecture — P0 foundation + P1 clients
 
 P0 keeps the upstream USB behavior while making the local core the only owner
 of controller hardware. The legacy GUI and the local API are clients of the
@@ -11,7 +11,25 @@ headless/API client ─┘       │
                              ├─ ControllerService ─ platform/windows/dualsense_adapter
                              ├─ HapticsService ─ pure DSP ─ WASAPI adapter
                              └─ TouchpadService ─ gesture interpreter ─ SendInput adapter
+
+Browser Vite SPA ────────────┘
+       │ HTTP + WebSocket (validated P0 contracts)
+Tauri 2 shell ───────────────┘
 ```
+
+The P1 browser and Tauri clients are the same React/TypeScript SPA. Its
+`RuntimeProvider` owns one projection of HTTP bootstrap data and validated
+WebSocket events, with explicit `online`, `reconnecting`, `offline` and
+`protocol_error` states. A WebSocket transport opening is not considered
+trusted/online until its mandatory initial `state.snapshot` validates. Pages do
+not import Python, `pydualsense`, WASAPI or Windows HID APIs. A lost core marks
+the projection stale and never presents it as current controller success.
+
+The Tauri layer is a shell only: it contains one window, a narrow CSP and the
+default core window permission. It does not execute processes, own hardware,
+bundle a Python sidecar, open a remote endpoint, or implement installer/tray/
+updater/autostart behavior. During P1 development the core is started
+separately with `python source/run.py --headless`.
 
 ## Boundaries
 
@@ -25,7 +43,10 @@ headless/API client ─┘       │
   the core never imports a platform implementation. Imports are lazy so Linux/CI can run
   domain and core tests without hardware.
 - `api/` is a presentation adapter. The default server bind is `127.0.0.1`;
-  CORS is opt-in and no tunnel or remote exposure is started.
+  browser HTTP requests with an explicit unapproved `Origin` are rejected
+  before reaching the facade, CORS is limited to the same Vite/Tauri
+  local-origin allow-list, and WebSocket origin validation uses that same
+  policy. No tunnel or remote exposure is started.
 - `gui.py` keeps the upstream presentation temporarily, but reads snapshots and
   calls facade commands rather than mutating runtime state.
 

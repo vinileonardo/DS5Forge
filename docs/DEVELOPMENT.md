@@ -1,4 +1,4 @@
-# P0 development and verification
+# P0/P1 development and verification
 
 Python 3.12.x is the required P0 development/build runtime. From the repository root:
 
@@ -21,6 +21,74 @@ python source/run.py
 The GUI/API share one `CoreFacade` in the desktop process. Use injected fake
 controller, capture and pointer adapters for tests; do not boot Bluetooth,
 wireless transports or virtual-controller software.
+
+## P1 frontend
+
+Node.js 20+ and npm are required for the web client. The browser client is
+served separately from the Python authority during development:
+
+```text
+# terminal 1, repository root
+python source/run.py --headless
+
+# terminal 2
+cd frontend
+npm ci
+npm run dev
+```
+
+The Vite server uses `127.0.0.1:5173`; preview uses `127.0.0.1:4173`.
+The Python API accepts only those explicit local browser origins and
+`http://tauri.localhost`; browser HTTP requests carrying any other `Origin`
+are rejected before reaching API handlers. The API bind remains loopback-only
+and no URL query parameter or cloud endpoint can override the frontend base URL.
+
+Frontend verification commands:
+
+```text
+cd frontend
+npm run format:check
+npm run lint
+npm run typecheck
+npm test
+npm run build
+npm run e2e
+```
+
+Tauri 2 local native development is optional. It is not required for Python
+core work or for the browser SPA. The `tauri-windows` CI job is the canonical
+native-Windows compile gate and provisions Node and Rust in the runner.
+
+To run/build the desktop shell locally on Windows, install Node.js LTS and
+Rust on the Windows host, select the `stable-msvc` Rust toolchain, and ensure
+Visual Studio Build Tools includes the **Desktop development with C++**
+workload. WebView2 is also required by Tauri and is normally already present
+on current Windows 10/11 installations.
+
+Recommended PowerShell bootstrap when local native development is actually
+needed:
+
+```text
+winget install --id OpenJS.NodeJS.LTS -e
+winget install --id Rustlang.Rustup -e
+# reopen PowerShell
+rustup default stable-msvc
+node --version
+npm --version
+rustc --version
+cargo --version
+```
+
+Then run `npm ci` and `npm run tauri:dev` or `npm run tauri:build` from
+`frontend/` in a Windows-accessible checkout. Do not add Linux WebKitGTK or a
+cross-compilation stack merely to validate the Windows shell from WSL unless
+Windows/CI builds are unavailable; native Windows compilation is the preferred
+path.
+
+`npm run tauri:build` invokes the normal frontend production build through
+Tauri's `beforeBuildCommand`, so it does not depend on a stale pre-existing
+`dist/`. The shell remains intentionally thin and has no Python sidecar,
+arbitrary process permission, installer, updater, tray or autostart behavior.
 
 The PyInstaller baseline remains available on Windows. `source/build.bat` validates that the active interpreter is Python 3.12.x before installing/building:
 

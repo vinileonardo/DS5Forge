@@ -77,7 +77,7 @@ validated configuration and better recovery/diagnostics when audio or hardware
 fails. Physical Windows + DualSense USB validation is still required before we
 claim regression-free hardware behavior.
 
-## Developer setup
+## P1 developer setup
 
 Python 3.12.x is the required P0 development/build runtime:
 
@@ -91,6 +91,75 @@ Run the retained GUI with `python source/run.py`, or run the same core/API
 without a GUI with `python source/run.py --headless`. The P0 API is strictly
 loopback-only (`127.0.0.1`, `::1` or `localhost`). Physical USB validation remains recorded separately as
 `HARDWARE VALIDATION PENDING` until the Windows checklist is executed.
+
+P1 makes the browser/Tauri SPA the primary presentation path while keeping the
+`customtkinter` GUI as a fallback. In two terminals, start the headless core
+and frontend:
+
+```text
+python source/run.py --headless
+cd frontend
+npm ci
+npm run dev
+```
+
+Open `http://127.0.0.1:5173`. The frontend talks only to the local P0 HTTP
+and WebSocket contracts; it never receives a controller object or Windows API
+handle. P1 does not bundle the Python core and does not add an installer, tray,
+updater or autostart path.
+
+### Optional native Tauri development on Windows
+
+The Rust/Windows native toolchain is **not required** to work on the Python
+core or the browser SPA. The `tauri-windows` GitHub Actions job is the
+canonical native-Windows compile gate and installs Node and Rust on the CI
+runner automatically.
+
+Only developers who want to run or build the Tauri desktop shell locally on
+Windows need the native prerequisites:
+
+- Node.js LTS and npm on the **Windows host**;
+- Rust installed with `rustup`, using the `stable-msvc` toolchain;
+- Microsoft Visual Studio Build Tools with the **Desktop development with C++** workload;
+- Microsoft Edge WebView2 Runtime (normally already present on current Windows 10/11 installations).
+
+Recommended Windows PowerShell setup when local Tauri development is actually
+needed:
+
+```powershell
+winget install --id OpenJS.NodeJS.LTS -e
+winget install --id Rustlang.Rustup -e
+```
+
+Open a new PowerShell session after installation, then verify/select the MSVC
+toolchain:
+
+```powershell
+node --version
+npm --version
+rustup default stable-msvc
+rustc --version
+cargo --version
+```
+
+Then, from a Windows-accessible checkout of the repository:
+
+```powershell
+cd frontend
+npm ci
+npm run tauri:dev
+# or
+npm run tauri:build
+```
+
+Do not install Linux WebKitGTK/Rust dependencies merely to validate the Windows
+shell from WSL. Native Windows builds should run on Windows or on the existing
+Windows CI job; Tauri documents Linux-to-Windows cross-compilation as a more
+complex fallback rather than the preferred workflow.
+
+Useful frontend gates from `frontend/` are `npm run format:check`,
+`npm run lint`, `npm run typecheck`, `npm test`, `npm run build` and
+`npm run e2e`.
 
 ## Roadmap
 

@@ -7,6 +7,7 @@ from typing import Any
 from ..core.facade import CoreFacade
 from ..diagnostics.logging import get_logger
 from ..domain.errors import DS5ForgeError
+from .origins import DEFAULT_ALLOWED_ORIGINS, validate_allowed_origins
 from .schemas import (
     API_PREFIX,
     ConfigPatchRequest,
@@ -27,7 +28,7 @@ from .schemas import (
 LOGGER = get_logger(__name__)
 
 
-def create_app(facade: CoreFacade, *, allowed_origins: tuple[str, ...] = ()) -> Any:
+def create_app(facade: CoreFacade, *, allowed_origins: tuple[str, ...] = DEFAULT_ALLOWED_ORIGINS) -> Any:
     """Build the loopback API without starting a server.
 
     FastAPI is imported here, rather than at package import time, so the
@@ -35,25 +36,72 @@ def create_app(facade: CoreFacade, *, allowed_origins: tuple[str, ...] = ()) -> 
     """
 
     try:
-        from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+        from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+        from fastapi.exceptions import RequestValidationError
         from fastapi.middleware.cors import CORSMiddleware
     except ImportError as exc:  # pragma: no cover - depends on environment
         raise RuntimeError("Install the 'api' dependencies to use the HTTP API: fastapi and uvicorn.") from exc
 
+    validated_origins = validate_allowed_origins(allowed_origins)
     app = FastAPI(title="DS5Forge Local API", version="1.0.0", docs_url=f"{API_PREFIX}/docs")
-    if allowed_origins:
+    if validated_origins:
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=list(allowed_origins),
+            allow_origins=list(validated_origins),
             allow_credentials=False,
             allow_methods=["GET", "PUT", "PATCH", "POST", "DELETE"],
             allow_headers=["Content-Type"],
         )
 
+    @app.middleware("http")
+    async def enforce_browser_origin(request: Request, call_next: Any) -> Any:
+        # CORS controls which responses browser JavaScript may read, but it is
+        # not CSRF protection: a cross-origin browser can still send some
+        # requests to a loopback service. Reject any browser request that
+        # explicitly carries an unapproved Origin before a command reaches the
+        # core. Origin-less native/local clients remain supported.
+        origin = request.headers.get("origin")
+        if origin is not None and origin not in validated_origins:
+            LOGGER.warning("http origin rejected", extra={"event": "http.origin_rejected", "origin": origin})
+            return _json_response(
+                403,
+                {
+                    "code": "api.origin_rejected",
+                    "message": "The browser origin is not allowed to access the local DS5Forge core.",
+                    "detail": None,
+                    "recoverable": False,
+                    "fields": {},
+                },
+            )
+        return await call_next(request)
+
     @app.exception_handler(DS5ForgeError)
     async def handle_domain_error(_request: Any, exc: DS5ForgeError) -> Any:
         status = 404 if exc.code.value == "profile.not_found" else 422
         return _json_response(status, exc.to_snapshot().to_dict())
+
+    @app.exception_handler(RequestValidationError)
+    async def handle_request_validation(_request: Request, exc: RequestValidationError) -> Any:
+        fields: dict[str, Any] = {}
+        for item in exc.errors():
+            location = [str(part) for part in item.get("loc", ()) if part not in {"body", "query", "path"}]
+            if location and location[-1] in {"int", "float"}:
+                # Pydantic reports both branches of Number = StrictInt |
+                # StrictFloat. The public contract exposes the actual field,
+                # not implementation details of that union.
+                location.pop()
+            key = ".".join(location) or "request"
+            fields.setdefault(key, item.get("msg", "invalid value"))
+        return _json_response(
+            422,
+            {
+                "code": "api.validation",
+                "message": "The request payload is invalid.",
+                "detail": None,
+                "recoverable": True,
+                "fields": fields,
+            },
+        )
 
     @app.get(f"{API_PREFIX}/health", response_model=HealthResponse)
     async def health() -> dict[str, Any]:
@@ -112,7 +160,7 @@ def create_app(facade: CoreFacade, *, allowed_origins: tuple[str, ...] = ()) -> 
     @app.websocket(f"{API_PREFIX}/ws")
     async def websocket(websocket: WebSocket) -> None:
         origin = websocket.headers.get("origin")
-        if origin is not None and origin not in allowed_origins:
+        if origin is not None and origin not in validated_origins:
             LOGGER.warning("websocket origin rejected", extra={"event": "websocket.origin_rejected"})
             await websocket.close(code=1008)
             return
