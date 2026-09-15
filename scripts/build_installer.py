@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,18 @@ def updater_endpoint(version: str) -> str:
 
     normalized = version.split("+", 1)[0]
     return RC_UPDATE_ENDPOINT if "-" in normalized else STABLE_UPDATE_ENDPOINT
+
+
+def resolve_npm_executable(*, platform_name: str | None = None) -> str:
+    """Resolve npm to an executable Python can launch directly on each platform."""
+
+    platform = platform_name or os.name
+    candidates = ("npm.cmd", "npm.exe", "npm") if platform == "nt" else ("npm",)
+    for candidate in candidates:
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    raise RuntimeError("npm executable was not found on PATH")
 
 
 def main() -> int:
@@ -42,7 +55,7 @@ def main() -> int:
     version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     config_path: Path | None = None
     try:
-        command = ["npm", "run", "tauri:build", "--"]
+        command = [resolve_npm_executable(), "run", "tauri:build", "--"]
         if args.release:
             fd, raw_path = tempfile.mkstemp(prefix="ds5forge-tauri-release-", suffix=".json")
             os.close(fd)
