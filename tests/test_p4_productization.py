@@ -349,12 +349,54 @@ class TestTauriReleaseContract(unittest.TestCase):
         self.assertIsInstance(updater["pubkey"], str)
         self.assertIsInstance(updater.get("endpoints", []), list)
 
+    def test_tauri_rust_sidecar_uses_external_bin_basename(self) -> None:
+        config = json.loads((ROOT / "frontend/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
+        self.assertEqual(config["bundle"]["externalBin"], ["binaries/ds5forge-core"])
+        rust = (ROOT / "frontend/src-tauri/src/lib.rs").read_text(encoding="utf-8")
+        self.assertIn('.sidecar("ds5forge-core")', rust)
+        self.assertNotIn('.sidecar("binaries/ds5forge-core")', rust)
+
+    def test_windows_gui_subsystem_attribute_is_on_binary_entrypoint(self) -> None:
+        main = (ROOT / "frontend/src-tauri/src/main.rs").read_text(encoding="utf-8")
+        library = (ROOT / "frontend/src-tauri/src/lib.rs").read_text(encoding="utf-8")
+        attribute = '#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]'
+        self.assertIn(attribute, main)
+        self.assertNotIn(attribute, library)
+
+    def test_pe_subsystem_verifier_distinguishes_gui_and_console(self) -> None:
+        verifier = runpy.run_path(str(ROOT / "scripts/verify_windows_pe_subsystem.py"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def write_pe(path: Path, subsystem: int) -> None:
+                payload = bytearray(0x120)
+                payload[:2] = b"MZ"
+                payload[0x3C:0x40] = (0x80).to_bytes(4, "little")
+                payload[0x80:0x84] = b"PE\0\0"
+                optional_header = 0x80 + 24
+                payload[optional_header : optional_header + 2] = (0x20B).to_bytes(2, "little")
+                payload[optional_header + 68 : optional_header + 70] = subsystem.to_bytes(2, "little")
+                path.write_bytes(payload)
+
+            gui = root / "gui.exe"
+            console = root / "console.exe"
+            write_pe(gui, verifier["IMAGE_SUBSYSTEM_WINDOWS_GUI"])
+            write_pe(console, verifier["IMAGE_SUBSYSTEM_WINDOWS_CUI"])
+            self.assertEqual(verifier["read_pe_subsystem"](gui), verifier["IMAGE_SUBSYSTEM_WINDOWS_GUI"])
+            self.assertEqual(
+                verifier["read_pe_subsystem"](console),
+                verifier["IMAGE_SUBSYSTEM_WINDOWS_CUI"],
+            )
+
     def test_release_workflow_uses_tauri_v2_nsis_artifact(self) -> None:
         workflow = (ROOT / ".github/workflows/windows-release.yml").read_text(encoding="utf-8")
+        ci_workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         installer = (ROOT / "scripts/build_installer.py").read_text(encoding="utf-8")
         self.assertIn('"createUpdaterArtifacts": True', installer)
         self.assertIn('-Filter "*-setup.exe"', workflow)
         self.assertNotIn("*.nsis.zip", workflow)
+        self.assertIn("verify_windows_pe_subsystem.py", workflow)
+        self.assertIn("verify_windows_pe_subsystem.py", ci_workflow)
 
     def test_release_build_uses_separate_rc_and_stable_update_channels(self) -> None:
         installer = runpy.run_path(str(ROOT / "scripts/build_installer.py"))

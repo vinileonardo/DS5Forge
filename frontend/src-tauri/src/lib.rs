@@ -1,5 +1,3 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
@@ -163,7 +161,7 @@ fn start_core_internal(app: &AppHandle) -> Result<(), String> {
     }
     let command = match app
         .shell()
-        .sidecar("binaries/ds5forge-core")
+        .sidecar("ds5forge-core")
         .map_err(|error| format!("sidecar command unavailable: {error}"))
     {
         Ok(command) => command,

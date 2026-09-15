@@ -50,15 +50,6 @@ export function OverviewPage() {
         title="Overview"
         description="See whether the local core and your wired DualSense are healthy, connected and configured as expected."
       />
-      {coreStatus !== "online" && (
-        <Notice
-          tone={coreStatus === "protocol_error" ? "danger" : "warning"}
-          title={coreStatus === "protocol_error" ? "State cannot be trusted" : "Local core offline"}
-        >
-          The browser will retry automatically. Configuration is never fabricated while the core is
-          unavailable.
-        </Notice>
-      )}
       <ErrorText error={actionError} />
       <div className="overview-grid">
         <Card className="hero-card">
