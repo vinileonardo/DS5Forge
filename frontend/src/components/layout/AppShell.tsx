@@ -113,7 +113,7 @@ export function AppShell() {
             <span>
               {coreStatus === "protocol_error"
                 ? "The core returned data the client could not trust. Check Diagnostics."
-                : "Start the core with `python source/run.py --headless`; this UI will retry automatically."}
+                : "The local core is unavailable. DS5Forge will retry automatically; use Settings > Restart Core or Diagnostics if it stays offline."}
             </span>
           </div>
         )}

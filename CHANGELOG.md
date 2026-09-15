@@ -4,6 +4,21 @@ All notable changes to DS5Forge will be documented in this file.
 
 The project currently evolves from the upstream `Casliyan/DS5companion` baseline recorded in `UPSTREAM.md`.
 
+## 0.4.0-rc.2 — Release Candidate 2 — 2026-09-15
+
+### Stabilization fixes from RC1 Windows validation
+
+- Fixed the Rust-side Tauri sidecar lookup to use the embedded binary basename (`ds5forge-core`) so the packaged core actually starts from an installed build.
+- Moved the Windows GUI subsystem attribute to the binary entrypoint (`main.rs`), eliminating the visible console window that RC1 opened beside the desktop UI.
+- Added a PE subsystem verifier to Windows CI and release workflows so both `ds5forge.exe` and `DS5ForgeCore.exe` must be GUI-subsystem binaries before release publication.
+- Removed the duplicated Overview-level core-offline notice and replaced source-development guidance with product recovery guidance (`Settings > Restart Core` / Diagnostics).
+
+### Validation intent
+
+- Keep an installed `0.4.0-rc.1` as the source install for the first real RC updater proof.
+- Publish `0.4.0-rc.2` only after CI proves the corrected Tauri build and PE subsystem contract.
+- Validate RC1 → RC2 update before continuing the Windows lifecycle, physical USB and Remote Access matrices.
+
 ## 0.4.0-rc.1 — Release Candidate 1 — 2026-09-15
 
 ### Release hardening

@@ -66,6 +66,27 @@ This record starts with `0.4.0-rc.1`. It separates CI evidence from real Windows
 - [ ] `update-rc/latest.json` resolves to the same RC version and versioned installer URL.
 - [ ] checksum verification succeeds for downloaded artifacts.
 
+## RC1 Windows findings — 2026-09-15
+
+The first installed `0.4.0-rc.1` provided real evidence that packaging CI alone was insufficient:
+
+- installer checksum matched the published release artifact and installation completed per-user.
+- `ds5forge.exe` launched with PE subsystem `3` (Windows CUI), which created an unwanted visible console window.
+- `DS5ForgeCore.exe` was correctly built with PE subsystem `2` (Windows GUI).
+- the installed sidecar existed as `C:\\Users\\Vini\\AppData\\Local\\DS5Forge\\ds5forge-core.exe`, but the Rust shell requested `binaries/ds5forge-core`; Tauri v2 Rust sidecar lookup expects the embedded binary basename.
+- no core process remained alive and TCP port `8765` was closed, so the frontend correctly reported `Local core offline`.
+- RC1 remains installed temporarily as the source version for the RC1 -> RC2 updater proof; runtime/hardware validation resumes on RC2 after the update succeeds.
+
+## RC2 stabilization gate
+
+- [ ] canonical version is `0.4.0-rc.2` across Python, npm/package-lock and Tauri/Cargo manifests.
+- [ ] Tauri Rust sidecar lookup uses `sidecar("ds5forge-core")` while `externalBin` remains `binaries/ds5forge-core`.
+- [ ] release binary entrypoint (`main.rs`) declares `windows_subsystem = "windows"` for non-debug builds.
+- [ ] Windows CI verifies `ds5forge.exe` PE subsystem is GUI (`2`).
+- [ ] Windows CI verifies `DS5ForgeCore.exe` PE subsystem is GUI (`2`).
+- [ ] Python tests, frontend checks, Playwright and native Rust checks are green.
+- [ ] signed `v0.4.0-rc.2` release refreshes `update-rc/latest.json` to RC2.
+
 ## Real Windows install/lifecycle — user evidence required
 
 Record Windows edition/version, architecture, DS5Forge installer checksum and exact RC version.

@@ -898,7 +898,7 @@ dependencies = [
 
 [[package]]
 name = "ds5forge"
-version = "0.4.0-rc.1"
+version = "0.4.0-rc.2"
 dependencies = [
  "serde",
  "serde_json",
