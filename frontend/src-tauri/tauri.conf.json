@@ -44,6 +44,8 @@
       "open": false
     },
     "updater": {
+      "pubkey": "",
+      "endpoints": [],
       "windows": {
         "installMode": "passive"
       }
