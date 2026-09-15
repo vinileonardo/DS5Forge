@@ -4,7 +4,7 @@ This record starts with `0.4.0-rc.1`. It separates CI evidence from real Windows
 
 ## RC policy
 
-- RC versions follow SemVer prerelease ordering: `0.4.0-rc.1`, `0.4.0-rc.2`, then `0.4.0`.
+- RC versions follow SemVer prerelease ordering: `0.4.0-rc.1`, `0.4.0-rc.2`, `0.4.0-rc.3`, then `0.4.0`.
 - No new product features are added during RC stabilization.
 - Bluetooth/wireless remains out of scope.
 - Every RC is built from a signed `vX.Y.Z-rc.N` tag by the Windows release workflow.
@@ -75,7 +75,7 @@ The first installed `0.4.0-rc.1` provided real evidence that packaging CI alone 
 - `DS5ForgeCore.exe` was correctly built with PE subsystem `2` (Windows GUI).
 - the installed sidecar existed as `C:\\Users\\Vini\\AppData\\Local\\DS5Forge\\ds5forge-core.exe`, but the Rust shell requested `binaries/ds5forge-core`; Tauri v2 Rust sidecar lookup expects the embedded binary basename.
 - no core process remained alive and TCP port `8765` was closed, so the frontend correctly reported `Local core offline`.
-- RC1 remains installed temporarily as the source version for the RC1 -> RC2 updater proof; runtime/hardware validation resumes on RC2 after the update succeeds.
+- RC1 could not exercise the in-app updater because the Settings page was entirely hidden when the core was offline. This is an RC1 recovery-UX defect, not updater success; RC2 becomes the corrected runtime baseline and RC2 -> RC3 becomes the first valid in-app updater proof.
 
 ## RC2 stabilization gate
 
@@ -86,6 +86,17 @@ The first installed `0.4.0-rc.1` provided real evidence that packaging CI alone 
 - [ ] Windows CI verifies `DS5ForgeCore.exe` PE subsystem is GUI (`2`).
 - [ ] Python tests, frontend checks, Playwright and native Rust checks are green.
 - [ ] signed `v0.4.0-rc.2` release refreshes `update-rc/latest.json` to RC2.
+
+## RC3 recovery-UX gate
+
+- [ ] canonical version is `0.4.0-rc.3` across Python, npm/package-lock and Tauri/Cargo manifests.
+- [ ] Settings renders desktop-shell recovery controls when `config=null` and the core is offline.
+- [ ] `Check for updates` remains enabled independently of core availability.
+- [ ] `Restart core` remains available from the installed desktop shell while the core is offline.
+- [ ] autostart availability is derived from the Tauri plugin rather than core reachability.
+- [ ] core-owned preference, Remote Access and Support Bundle actions remain unavailable or disabled while the core is offline.
+- [ ] frontend regression tests cover the offline recovery surface.
+- [ ] signed `v0.4.0-rc.3` release refreshes `update-rc/latest.json` to RC3.
 
 ## Real Windows install/lifecycle — user evidence required
 
@@ -137,15 +148,15 @@ Record Windows edition/version, architecture, DS5Forge installer checksum and ex
 - [ ] disabling Remote Access revokes sessions and stops the tunnel.
 - [ ] quitting DS5Forge stops the managed tunnel.
 
-## Updater end-to-end — requires `0.4.0-rc.2`
+## Updater end-to-end — first valid proof uses `0.4.0-rc.2` -> `0.4.0-rc.3`
 
-After `rc.1` runtime validation, create `0.4.0-rc.2` only from stabilization fixes.
+RC1 could not expose its updater because the core-start defect also caused the Settings page to return early. Install RC2 manually only to establish the corrected runtime baseline; then prove the actual in-app updater with RC2 -> RC3.
 
-- [ ] installed `rc.1` detects `rc.2` through `update-rc`.
+- [ ] installed `rc.2` detects `rc.3` through `update-rc`.
 - [ ] detached signature is accepted.
 - [ ] core is neutralized/stopped before updater installation starts.
 - [ ] passive Windows update completes.
-- [ ] updated app reports `0.4.0-rc.2` and starts the packaged core.
+- [ ] updated app reports `0.4.0-rc.3` and starts the packaged core.
 - [ ] profiles/config/user data remain intact.
 - [ ] invalid signature/update is rejected and current install remains usable.
 - [ ] downgrade metadata is rejected.
