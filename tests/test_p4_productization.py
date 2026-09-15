@@ -347,6 +347,13 @@ class TestTauriReleaseContract(unittest.TestCase):
         self.assertIsInstance(updater["pubkey"], str)
         self.assertIsInstance(updater.get("endpoints", []), list)
 
+    def test_release_workflow_uses_tauri_v2_nsis_artifact(self) -> None:
+        workflow = (ROOT / ".github/workflows/windows-release.yml").read_text(encoding="utf-8")
+        installer = (ROOT / "scripts/build_installer.py").read_text(encoding="utf-8")
+        self.assertIn('"createUpdaterArtifacts": True', installer)
+        self.assertIn('-Filter "*-setup.exe"', workflow)
+        self.assertNotIn('*.nsis.zip', workflow)
+
     def test_tauri_capabilities_stay_minimal(self) -> None:
         capabilities = json.loads((ROOT / "frontend/src-tauri/capabilities/default.json").read_text(encoding="utf-8"))
         permissions = capabilities["permissions"]
