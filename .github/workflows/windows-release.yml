@@ -38,9 +38,11 @@ jobs:
         run: |
           $bundleDir = "frontend/src-tauri/target/release/bundle/nsis"
           python scripts/generate_checksums.py $bundleDir --output "$bundleDir/SHA256SUMS.txt"
-          $bundle = Get-ChildItem $bundleDir -Filter "*.nsis.zip" | Select-Object -First 1
-          if (-not $bundle) { throw "No Tauri updater bundle was produced" }
-          $signature = Get-Content "$($bundle.FullName).sig" -Raw
+          $bundle = Get-ChildItem $bundleDir -Filter "*-setup.exe" | Select-Object -First 1
+          if (-not $bundle) { throw "No Tauri NSIS updater installer was produced" }
+          $signaturePath = "$($bundle.FullName).sig"
+          if (-not (Test-Path $signaturePath)) { throw "No detached signature was produced for the NSIS updater installer" }
+          $signature = Get-Content $signaturePath -Raw
           $url = "https://github.com/vinileonardo/DS5Forge/releases/download/${{ github.ref_name }}/$($bundle.Name)"
           python scripts/generate_release_metadata.py --signature $signature --url $url --output "$bundleDir/latest.json"
       - uses: actions/upload-artifact@v4
