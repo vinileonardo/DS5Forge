@@ -4,7 +4,7 @@ This record starts with `0.4.0-rc.1`. It separates CI evidence from real Windows
 
 ## RC policy
 
-- RC versions follow SemVer prerelease ordering: `0.4.0-rc.1`, `0.4.0-rc.2`, `0.4.0-rc.3`, then `0.4.0`.
+- RC versions follow SemVer prerelease ordering: `0.4.0-rc.1`, `0.4.0-rc.2`, `0.4.0-rc.3`, `0.4.0-rc.4`, then `0.4.0`.
 - No new product features are added during RC stabilization.
 - Bluetooth/wireless remains out of scope.
 - Every RC is built from a signed `vX.Y.Z-rc.N` tag by the Windows release workflow.
@@ -75,7 +75,7 @@ The first installed `0.4.0-rc.1` provided real evidence that packaging CI alone 
 - `DS5ForgeCore.exe` was correctly built with PE subsystem `2` (Windows GUI).
 - the installed sidecar existed as `C:\\Users\\Vini\\AppData\\Local\\DS5Forge\\ds5forge-core.exe`, but the Rust shell requested `binaries/ds5forge-core`; Tauri v2 Rust sidecar lookup expects the embedded binary basename.
 - no core process remained alive and TCP port `8765` was closed, so the frontend correctly reported `Local core offline`.
-- RC1 could not exercise the in-app updater because the Settings page was entirely hidden when the core was offline. This is an RC1 recovery-UX defect, not updater success; RC2 becomes the corrected runtime baseline and RC2 -> RC3 becomes the first valid in-app updater proof.
+- RC1 could not exercise the in-app updater because the Settings page was entirely hidden when the core was offline. This is an RC1 recovery-UX defect, not updater success; later RC validation must establish a source version whose updater remains reachable even when realtime transport is degraded.
 
 ## RC2 stabilization gate
 
@@ -87,6 +87,19 @@ The first installed `0.4.0-rc.1` provided real evidence that packaging CI alone 
 - [ ] Python tests, frontend checks, Playwright and native Rust checks are green.
 - [ ] signed `v0.4.0-rc.2` release refreshes `update-rc/latest.json` to RC2.
 
+## RC2 Windows findings — 2026-09-15
+
+Real RC2 validation proved the sidecar-launch and PE-subsystem fixes but exposed a second packaging defect:
+
+- `ds5forge.exe` reported `0.4.0-rc.2` and no visible console window opened.
+- the Tauri shell successfully launched the packaged `ds5forge-core.exe`; the core remained alive and listened on `127.0.0.1:8765`.
+- `/api/v1/health`, `/state`, `/config` and `/profiles` returned HTTP `200` with the installed WebView origin `http://tauri.localhost` allowed by CORS.
+- the health/state response reported the wired DualSense connected and core/controller/audio/touchpad subsystems ready/healthy.
+- a browser-like WebSocket upgrade to `/api/v1/ws` returned HTTP `404` instead of `101 Switching Protocols`, even though the FastAPI route exists in source.
+- root cause: `uvicorn` was bundled without an explicit WebSocket protocol runtime (`websockets`/`wsproto`); ASGI-level tests exercised the route directly and therefore could not detect the missing packaged transport implementation.
+- because `RuntimeProvider` treats the validated WebSocket as the authority for `coreStatus=online`, the frontend correctly remained stale/offline despite healthy HTTP state.
+- RC3 inherited this packaged realtime defect because RC3 only changes recovery UI; RC3 is therefore used as the source install for the next updater proof, not as a runtime-green candidate.
+
 ## RC3 recovery-UX gate
 
 - [ ] canonical version is `0.4.0-rc.3` across Python, npm/package-lock and Tauri/Cargo manifests.
@@ -97,6 +110,19 @@ The first installed `0.4.0-rc.1` provided real evidence that packaging CI alone 
 - [ ] core-owned preference, Remote Access and Support Bundle actions remain unavailable or disabled while the core is offline.
 - [ ] frontend regression tests cover the offline recovery surface.
 - [ ] signed `v0.4.0-rc.3` release refreshes `update-rc/latest.json` to RC3.
+
+## RC4 packaged realtime gate
+
+- [ ] canonical version is `0.4.0-rc.4` across Python, npm/package-lock and Tauri/Cargo manifests.
+- [ ] `websockets` is an explicit runtime dependency in both package metadata and Windows source requirements.
+- [ ] PyInstaller deterministically collects the WebSocket runtime alongside Uvicorn.
+- [ ] the sidecar entrypoint forces headless mode while preserving shell-supplied loopback host/port arguments.
+- [ ] Windows packaging CI launches the actual `DS5ForgeCore.exe` and receives HTTP health through loopback.
+- [ ] packaged-core smoke receives `101 Switching Protocols` for `/api/v1/ws` with `Origin: http://tauri.localhost`.
+- [ ] the first packaged WebSocket frame is a version-1 `state.snapshot` event.
+- [ ] Tauri Windows CI repeats the packaged-core smoke before bundling the sidecar.
+- [ ] signed Windows release workflow repeats the packaged-core smoke before publication.
+- [ ] signed `v0.4.0-rc.4` release refreshes `update-rc/latest.json` to RC4.
 
 ## Real Windows install/lifecycle — user evidence required
 
@@ -148,15 +174,15 @@ Record Windows edition/version, architecture, DS5Forge installer checksum and ex
 - [ ] disabling Remote Access revokes sessions and stops the tunnel.
 - [ ] quitting DS5Forge stops the managed tunnel.
 
-## Updater end-to-end — first valid proof uses `0.4.0-rc.2` -> `0.4.0-rc.3`
+## Updater end-to-end — first valid proof uses `0.4.0-rc.3` -> `0.4.0-rc.4`
 
-RC1 could not expose its updater because the core-start defect also caused the Settings page to return early. Install RC2 manually only to establish the corrected runtime baseline; then prove the actual in-app updater with RC2 -> RC3.
+RC1/RC2 could not expose a reliable updater path while their Settings surface depended on core-backed configuration. RC3 fixes that recovery deadlock, so install RC3 manually as the source version even though its packaged WebSocket transport is still defective. From RC3, the updater must remain reachable while the UI reports the core offline, allowing the signed RC3 -> RC4 path to be tested end-to-end.
 
-- [ ] installed `rc.2` detects `rc.3` through `update-rc`.
+- [ ] installed `rc.3` detects `rc.4` through `update-rc` while realtime core status is offline.
 - [ ] detached signature is accepted.
 - [ ] core is neutralized/stopped before updater installation starts.
 - [ ] passive Windows update completes.
-- [ ] updated app reports `0.4.0-rc.3` and starts the packaged core.
+- [ ] updated app reports `0.4.0-rc.4`, starts the packaged core and reaches WebSocket `online` state.
 - [ ] profiles/config/user data remain intact.
 - [ ] invalid signature/update is rejected and current install remains usable.
 - [ ] downgrade metadata is rejected.

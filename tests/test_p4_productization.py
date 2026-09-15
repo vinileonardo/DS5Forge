@@ -356,6 +356,22 @@ class TestTauriReleaseContract(unittest.TestCase):
         self.assertIn('.sidecar("ds5forge-core")', rust)
         self.assertNotIn('.sidecar("binaries/ds5forge-core")', rust)
 
+    def test_sidecar_entrypoint_preserves_shell_bind_arguments(self) -> None:
+        entrypoint = runpy.run_path(str(ROOT / "source/run_sidecar.py"))
+        self.assertEqual(
+            entrypoint["sidecar_argv"](["--headless", "--host", "127.0.0.1", "--port", "18765"]),
+            ["--headless", "--host", "127.0.0.1", "--port", "18765"],
+        )
+
+    def test_packaged_core_declares_and_collects_websocket_runtime(self) -> None:
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        requirements = (ROOT / "source/requirements.txt").read_text(encoding="utf-8")
+        spec = (ROOT / "source/build.spec").read_text(encoding="utf-8")
+        self.assertIn('"websockets>=13,<16"', pyproject)
+        self.assertIn("websockets>=13,<16", requirements)
+        self.assertIn('"websockets"', spec)
+        self.assertIn('("customtkinter", "fastapi", "uvicorn", "websockets")', spec)
+
     def test_windows_gui_subsystem_attribute_is_on_binary_entrypoint(self) -> None:
         main = (ROOT / "frontend/src-tauri/src/main.rs").read_text(encoding="utf-8")
         library = (ROOT / "frontend/src-tauri/src/lib.rs").read_text(encoding="utf-8")
@@ -397,6 +413,8 @@ class TestTauriReleaseContract(unittest.TestCase):
         self.assertNotIn("*.nsis.zip", workflow)
         self.assertIn("verify_windows_pe_subsystem.py", workflow)
         self.assertIn("verify_windows_pe_subsystem.py", ci_workflow)
+        self.assertIn("smoke_packaged_core.py", workflow)
+        self.assertGreaterEqual(ci_workflow.count("smoke_packaged_core.py"), 2)
 
     def test_release_build_uses_separate_rc_and_stable_update_channels(self) -> None:
         installer = runpy.run_path(str(ROOT / "scripts/build_installer.py"))

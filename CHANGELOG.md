@@ -4,6 +4,21 @@ All notable changes to DS5Forge will be documented in this file.
 
 The project currently evolves from the upstream `Casliyan/DS5companion` baseline recorded in `UPSTREAM.md`.
 
+## 0.4.0-rc.4 — Release Candidate 4 — 2026-09-15
+
+### Packaged realtime transport stabilization
+
+- Adds `websockets` as an explicit core runtime dependency and collects it in the PyInstaller bundle so Uvicorn can perform RFC6455 upgrades in the installed sidecar.
+- Adds a packaged-core smoke test that launches `DS5ForgeCore.exe`, verifies loopback health/CORS, requires a real WebSocket `101 Switching Protocols`, validates the first `state.snapshot` frame, and shuts the core down cleanly.
+- Runs the packaged realtime smoke in both Windows CI packaging paths and again in the signed Windows release workflow before publication.
+- Preserves shell-supplied `--host`/`--port` arguments in the PyInstaller sidecar entrypoint while still forcing headless mode.
+
+### Validation finding from RC2
+
+- RC2 fixed sidecar launch and the unwanted console window: the installed core stayed alive, listened on `127.0.0.1:8765`, reported a healthy connected DualSense over HTTP, and no console window appeared.
+- The installed core returned HTTP `404` to an otherwise valid `/api/v1/ws` upgrade request because the PyInstaller runtime did not contain a Uvicorn WebSocket protocol backend. The frontend therefore stayed `offline` even while HTTP health/state/config were healthy.
+- RC3 inherited that packaging defect because RC3 only hardened offline recovery UI. Do not use RC2 → RC3 as updater proof; the next valid candidate is RC4 after packaged WebSocket transport is proven green.
+
 ## 0.4.0-rc.3 — Release Candidate 3 — 2026-09-15
 
 ### Recovery UX hardening
