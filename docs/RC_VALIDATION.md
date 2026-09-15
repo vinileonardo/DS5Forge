@@ -4,7 +4,7 @@ This record starts with `0.4.0-rc.1`. It separates CI evidence from real Windows
 
 ## RC policy
 
-- RC versions follow SemVer prerelease ordering: `0.4.0-rc.1`, `0.4.0-rc.2`, `0.4.0-rc.3`, `0.4.0-rc.4`, `0.4.0-rc.5`, then further RCs only if validation still finds blockers before `0.4.0`.
+- RC versions follow SemVer prerelease ordering: `0.4.0-rc.1`, `0.4.0-rc.2`, `0.4.0-rc.3`, `0.4.0-rc.4`, `0.4.0-rc.5`, `0.4.0-rc.6`, then further RCs only if validation still finds blockers before `0.4.0`.
 - No new product features are added during RC stabilization.
 - Bluetooth/wireless remains out of scope.
 - Every RC is built from a signed `vX.Y.Z-rc.N` tag by the Windows release workflow.
@@ -145,8 +145,35 @@ A later inspection of the still-installed RC2 exposed a shutdown-safety defect t
 - [ ] packaged-core Windows smoke tracks the launched `DS5ForgeCore.exe` PIDs and fails if any remain alive after lifecycle stop.
 - [ ] forced fallback success is surfaced in lifecycle diagnostics rather than silently hidden.
 - [ ] Windows native `cargo fmt`, `cargo check` and `cargo clippy -D warnings` pass.
-- [ ] installed RC5 with a real wired DualSense proves Restart Core and tray Quit leave no `ds5forge-core.exe` process and no listener.
-- [ ] only after that real RC5 teardown proof may RC5 be used as the source for an in-app updater E2E to a later RC.
+- [x] installed RC5 with a real wired DualSense proves Restart Core replaces the prior PyInstaller process tree and tray Quit leaves no `ds5forge.exe`, no `ds5forge-core.exe` and no listener on port 8765.
+- [x] RC5 is accepted as a teardown-safe updater source from a process-lifecycle perspective.
+- [ ] RC6 must verify the shutdown ordering fix: audio haptics stop/zero motors before controller neutralization and process teardown, so Quit does not continue perceptible audio-driven rumble during shutdown.
+- [ ] only after the RC6 shutdown-order fix is packaged and validated may the final stable lifecycle gate be considered closed.
+
+## RC5 installed runtime finding — 2026-09-15
+
+Real RC5 validation confirms the core transport fix and exposes a frontend-only contract mismatch:
+
+- installed shell and core report `0.4.0-rc.5`; the shell, PyInstaller wrapper and inner core process are present as expected while running.
+- `/api/v1/health`, `/state`, `/config` and `/profiles` return HTTP `200` with the installed Tauri origin allowed.
+- health reports core ready, wired DualSense connected, audio listening and touchpad ready; the controller also produces startup and audio-driven haptics.
+- a Windows WebSocket client completes `/api/v1/ws` and receives a version-1 `state.snapshot`; subsequent live `state.updated` and `controller.input` events are emitted continuously.
+- the frontend `RuntimeStateSchema` rejects the backend's valid `automation.foreground: null` because its schema declared the field optional but non-nullable, causing the UI to report the core offline despite a healthy transport/runtime.
+- the Python API contract already declares `AutomationResponse.foreground` as `ForegroundApplicationResponse | None`, so the frontend is the incorrect side of the contract.
+- the installed launch shows roughly a 15-second gap between the PyInstaller wrapper process and the inner runtime process becoming available. Track this as startup UX/performance evidence; do not treat it as the cause of the offline status.
+- a real `Restart Core` on RC5 removed the original wrapper/child PIDs `22980 → 36916` and created `11376 → 39756` under the unchanged shell PID `34988`; no old core process remained, the new child owned port `8765`, and health returned `healthy` with the wired controller connected.
+
+## RC6 frontend contract gate
+
+- [x] canonical version is `0.4.0-rc.6` across Python, npm/package-lock and Tauri/Cargo manifests.
+- [x] frontend `AutomationStateSchema.foreground` is nullable as well as optional, matching the Python `AutomationResponse` contract.
+- [x] a regression test accepts an automation state with `foreground: null` while preserving strict validation for the rest of the payload.
+- [x] offline Playwright coverage explicitly isolates local HTTP/WebSocket traffic and remains deterministic even when an installed DS5Forge core is running on the development machine.
+- [x] Restart Core shows a centered blocking progress surface across stop/start/readiness phases and prevents repeated restart clicks while the sidecar is cycling.
+- [x] the corrected frontend schema validates repeated live RC5 `/state` payloads with a wired DualSense/audio runtime active.
+- [x] the corrected schemas validate a real RC5 WebSocket sequence containing `state.snapshot`, `state.updated` and `controller.input` events.
+- [x] core teardown stops audio-driven haptics before controller neutralization; unit coverage locks this shutdown ordering.
+- [ ] signed `v0.4.0-rc.6` release refreshes `update-rc/latest.json` to RC6 after CI repeats the package/Tauri gates.
 
 ## Real Windows install/lifecycle — user evidence required
 

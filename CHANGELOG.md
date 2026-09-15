@@ -4,6 +4,24 @@ All notable changes to DS5Forge will be documented in this file.
 
 The project currently evolves from the upstream `Casliyan/DS5companion` baseline recorded in `UPSTREAM.md`.
 
+## 0.4.0-rc.6 — Release Candidate 6 — 2026-09-15
+
+### Frontend runtime-contract stabilization
+
+- Aligns the frontend `AutomationStateSchema` with the Python API contract by accepting `automation.foreground = null` when no automation foreground projection is available.
+- Adds a regression test for the nullable automation foreground contract instead of weakening the rest of the strict runtime schema.
+- Makes the offline Playwright smoke deterministic by explicitly isolating local HTTP/WebSocket traffic, so a developer's installed DS5Forge core cannot make the offline scenario spuriously fail.
+- Adds a centered blocking restart progress surface with explicit stop/start/wait phases, keeping the UI responsive and preventing repeated restart clicks while the sidecar is cycling.
+- Validates the corrected schema against the live installed RC5 HTTP state and a real WebSocket sequence with a wired DualSense/audio runtime active.
+
+### Validation finding from installed RC5
+
+- RC5 packaging, HTTP health and WebSocket transport are healthy: the installed core reports the wired DualSense connected, audio listening and touchpad ready, and the WebSocket emits valid `state.snapshot`/`state.updated`/`controller.input` events.
+- The UI still reported the core offline because `RuntimeStateSchema` rejected the backend's explicitly nullable `automation.foreground`; this was a frontend contract mismatch rather than a core or transport failure.
+- Installed RC5 startup showed roughly a 15-second gap between the PyInstaller wrapper process and its inner runtime process. This is tracked as startup UX/performance evidence, not conflated with the runtime-contract failure.
+- Real RC5 lifecycle validation proved Restart Core replaces the complete PyInstaller process tree and tray Quit leaves zero DS5Forge processes/listener. During Quit, audio-driven rumble remained perceptible for part of teardown because audio haptics were stopped after controller shutdown began; RC6 now stops audio haptics first, then neutralizes/stops the controller.
+- A real RC5 `Restart Core` replaced wrapper/child PIDs `22980 → 36916` with a fresh `11376 → 39756` tree under the same shell, leaving no old core process behind; the new core owned port `8765` and returned healthy/connected state.
+
 ## 0.4.0-rc.5 — Release Candidate 5 — 2026-09-15
 
 ### Sidecar teardown and updater safety

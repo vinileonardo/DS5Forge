@@ -59,6 +59,8 @@ export function SettingsPage() {
   const [updateMessage, setUpdateMessage] = useState<string | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateReady, setUpdateReady] = useState(false);
+  const [restartBusy, setRestartBusy] = useState(false);
+  const [restartStatus, setRestartStatus] = useState("Restarting local core…");
 
   const dirty = Boolean(
     config && draft && (config.theme !== draft.theme || config.mic_button !== draft.mic_button),
@@ -136,6 +138,9 @@ export function SettingsPage() {
   }
 
   async function restartCore() {
+    setRestartBusy(true);
+    setRestartStatus("Stopping local core safely…");
+    setMessage(null);
     setError(null);
     try {
       const isTauriShell =
@@ -143,14 +148,34 @@ export function SettingsPage() {
       if (isTauriShell) {
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke("stop_core");
+        setRestartStatus("Starting local core…");
         const snapshot = await invoke<{ state: string }>("start_core");
         setLifecycle({ state: snapshot.state, core: snapshot.state });
+        setRestartStatus("Waiting for controller services…");
+        const deadline = Date.now() + 30_000;
+        while (Date.now() < deadline) {
+          const current = await invoke<{ state: string; message?: string | null }>("lifecycle");
+          setLifecycle({ state: current.state, core: current.state });
+          if (current.state === "application_ready" || current.state === "core_ready") break;
+          if (["core_start_failed", "core_timeout", "shutdown_timeout"].includes(current.state)) {
+            throw new Error(current.message || `Core restart failed in state ${current.state}.`);
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 250));
+        }
+        const finalState = await invoke<{ state: string; message?: string | null }>("lifecycle");
+        setLifecycle({ state: finalState.state, core: finalState.state });
+        if (finalState.state !== "application_ready" && finalState.state !== "core_ready") {
+          throw new Error(finalState.message || "Core did not become ready within 30 seconds.");
+        }
       } else {
+        setRestartStatus("Restarting local core…");
         setLifecycle(await api.restartCore());
       }
-      setMessage("Core restart requested. Hardware outputs are released by the core before restart.");
+      setMessage("Core restarted. Hardware outputs were released before the new core started.");
     } catch (reason) {
       setError(reason);
+    } finally {
+      setRestartBusy(false);
     }
   }
 
@@ -278,6 +303,23 @@ export function SettingsPage() {
 
   return (
     <>
+      {restartBusy && (
+        <div
+          className="core-restart-backdrop"
+          role="status"
+          aria-live="polite"
+          aria-label="Restarting local core"
+        >
+          <div className="core-restart-status">
+            <span className="spinner core-restart-spinner" aria-hidden="true" />
+            <strong>{restartStatus}</strong>
+            <span>
+              DS5Forge is releasing the current controller session and waiting for the new core to become
+              ready.
+            </span>
+          </div>
+        </div>
+      )}
       <PageHeader
         eyebrow="Client and core preferences"
         title="Settings"
@@ -377,8 +419,8 @@ export function SettingsPage() {
           </dl>
           <div className="form-actions">
             <span className="muted">Restart releases controller outputs before starting the core again.</span>
-            <Button variant="quiet" onClick={() => void restartCore()}>
-              <RefreshCw size={15} /> Restart core
+            <Button variant="quiet" onClick={() => void restartCore()} disabled={restartBusy}>
+              <RefreshCw size={15} /> {restartBusy ? "Restarting…" : "Restart core"}
             </Button>
           </div>
         </Card>

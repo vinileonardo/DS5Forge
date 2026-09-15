@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AutomationStateSchema,
   ConfigSchema,
   ControllerInputSchema,
   ControllerTelemetrySchema,
@@ -55,6 +56,31 @@ describe("P0 runtime contracts", () => {
 
   it("rejects incomplete state snapshots instead of creating frontend defaults", () => {
     expect(RuntimeStateSchema.safeParse({ connection: "connected" }).success).toBe(false);
+  });
+
+  it("accepts the backend automation contract when foreground is explicitly null", () => {
+    const automation = {
+      enabled: false,
+      exit_policy: "restore_previous" as const,
+      default_profile: "Default",
+      active_game_id: null,
+      active_game_name: null,
+      active_profile: "Default",
+      profile_origin: "manual" as const,
+      manual_override: false,
+      last_match: null,
+      rule_evaluations: [],
+      previous_profile: null,
+      previous_compatibility_mode: null,
+      transition: 0,
+      last_transition_at: 0,
+      status: "idle",
+      diagnostic: null,
+      foreground: null,
+      active_game: null,
+    };
+
+    expect(AutomationStateSchema.safeParse(automation).success).toBe(true);
   });
 
   it("accepts bounded controller telemetry and rejects coercion, non-finite values and unknown fields", () => {

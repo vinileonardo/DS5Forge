@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ds5forge"
-version = "0.4.0-rc.5"
+version = "0.4.0-rc.6"
 description = "Wired DualSense companion with a local core authority"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
