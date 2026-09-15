@@ -4,7 +4,7 @@ This record starts with `0.4.0-rc.1`. It separates CI evidence from real Windows
 
 ## RC policy
 
-- RC versions follow SemVer prerelease ordering: `0.4.0-rc.1`, `0.4.0-rc.2`, `0.4.0-rc.3`, `0.4.0-rc.4`, then `0.4.0`.
+- RC versions follow SemVer prerelease ordering: `0.4.0-rc.1`, `0.4.0-rc.2`, `0.4.0-rc.3`, `0.4.0-rc.4`, `0.4.0-rc.5`, then further RCs only if validation still finds blockers before `0.4.0`.
 - No new product features are added during RC stabilization.
 - Bluetooth/wireless remains out of scope.
 - Every RC is built from a signed `vX.Y.Z-rc.N` tag by the Windows release workflow.
@@ -98,7 +98,7 @@ Real RC2 validation proved the sidecar-launch and PE-subsystem fixes but exposed
 - a browser-like WebSocket upgrade to `/api/v1/ws` returned HTTP `404` instead of `101 Switching Protocols`, even though the FastAPI route exists in source.
 - root cause: `uvicorn` was bundled without an explicit WebSocket protocol runtime (`websockets`/`wsproto`); ASGI-level tests exercised the route directly and therefore could not detect the missing packaged transport implementation.
 - because `RuntimeProvider` treats the validated WebSocket as the authority for `coreStatus=online`, the frontend correctly remained stale/offline despite healthy HTTP state.
-- RC3 inherited this packaged realtime defect because RC3 only changes recovery UI; RC3 is therefore used as the source install for the next updater proof, not as a runtime-green candidate.
+- RC3 inherited this packaged realtime defect because RC3 only changes recovery UI. It proved that updater controls can remain reachable while the core is degraded, but it is not a runtime-green or teardown-safe updater source.
 
 ## RC3 recovery-UX gate
 
@@ -123,6 +123,30 @@ Real RC2 validation proved the sidecar-launch and PE-subsystem fixes but exposed
 - [ ] Tauri Windows CI repeats the packaged-core smoke before bundling the sidecar.
 - [ ] signed Windows release workflow repeats the packaged-core smoke before publication.
 - [ ] signed `v0.4.0-rc.4` release refreshes `update-rc/latest.json` to RC4.
+
+## RC2 lifecycle finding after packaged-core validation — 2026-09-15
+
+A later inspection of the still-installed RC2 exposed a shutdown-safety defect that RC4 also inherits:
+
+- the desktop shell process was no longer running, but two `ds5forge-core.exe` processes (PyInstaller wrapper + child) remained alive.
+- TCP port `8765` was already closed, so the old supervisor would have considered the core stopped even though the executable process tree was still present.
+- the updater calls the Tauri `stop_core` command before `downloadAndInstall`; returning success on port closure alone can let the installer attempt to replace a still-loaded `ds5forge-core.exe`.
+- CI's packaged-core smoke did not reproduce this because Windows runners have no physical DualSense/audio runtime; the packaged core exits cleanly there. Real hardware evidence therefore remains authoritative for this lifecycle path.
+- RC4 proves the packaged WebSocket runtime but is not accepted as a safe updater source until process-tree teardown is hardened.
+
+## RC5 sidecar process-termination gate
+
+- [ ] canonical version is `0.4.0-rc.5` across Python, npm/package-lock and Tauri/Cargo manifests.
+- [ ] `CommandEvent::Terminated` is recorded per sidecar generation before stale-monitor checks.
+- [ ] `stop_core` waits boundedly for the active sidecar process generation to terminate; loopback-port closure alone is insufficient.
+- [ ] Windows forced fallback uses `taskkill /PID <pid> /T /F` with `CREATE_NO_WINDOW` to terminate the PyInstaller wrapper and descendants.
+- [ ] updater/quit returns an explicit shutdown error if process-tree termination cannot be confirmed.
+- [ ] `RunEvent::ExitRequested` prevents application exit when teardown fails, so tray Quit cannot intentionally leave the core orphaned.
+- [ ] packaged-core Windows smoke tracks the launched `DS5ForgeCore.exe` PIDs and fails if any remain alive after lifecycle stop.
+- [ ] forced fallback success is surfaced in lifecycle diagnostics rather than silently hidden.
+- [ ] Windows native `cargo fmt`, `cargo check` and `cargo clippy -D warnings` pass.
+- [ ] installed RC5 with a real wired DualSense proves Restart Core and tray Quit leave no `ds5forge-core.exe` process and no listener.
+- [ ] only after that real RC5 teardown proof may RC5 be used as the source for an in-app updater E2E to a later RC.
 
 ## Real Windows install/lifecycle — user evidence required
 
@@ -174,15 +198,17 @@ Record Windows edition/version, architecture, DS5Forge installer checksum and ex
 - [ ] disabling Remote Access revokes sessions and stops the tunnel.
 - [ ] quitting DS5Forge stops the managed tunnel.
 
-## Updater end-to-end — first valid proof uses `0.4.0-rc.3` -> `0.4.0-rc.4`
+## Updater end-to-end — source candidate must include RC5 teardown hardening
 
-RC1/RC2 could not expose a reliable updater path while their Settings surface depended on core-backed configuration. RC3 fixes that recovery deadlock, so install RC3 manually as the source version even though its packaged WebSocket transport is still defective. From RC3, the updater must remain reachable while the UI reports the core offline, allowing the signed RC3 -> RC4 path to be tested end-to-end.
+RC1/RC2 could not expose a reliable updater surface, RC3 fixed recovery UI, and RC4 fixed packaged realtime transport. Real RC2 lifecycle evidence then showed that RC2-RC4 can report `stop_core` success after the loopback API closes while the PyInstaller process tree is still alive. Therefore RC3 -> RC4 is no longer accepted as a safe updater proof.
 
-- [ ] installed `rc.3` detects `rc.4` through `update-rc` while realtime core status is offline.
+The first valid updater E2E must start from an installed RC5 (or later) that has already passed real-hardware teardown validation, and target a newer signed RC. If RC5 passes lifecycle validation without further code changes, publish a minimal later RC solely to exercise the signed updater path from RC5.
+
+- [ ] installed RC5 (or later teardown-safe source) detects the next RC through `update-rc`.
 - [ ] detached signature is accepted.
-- [ ] core is neutralized/stopped before updater installation starts.
+- [ ] core is neutralized and the actual sidecar process tree terminates before updater installation starts.
 - [ ] passive Windows update completes.
-- [ ] updated app reports `0.4.0-rc.4`, starts the packaged core and reaches WebSocket `online` state.
+- [ ] updated app reports the target RC, starts the packaged core and reaches WebSocket `online` state.
 - [ ] profiles/config/user data remain intact.
 - [ ] invalid signature/update is rejected and current install remains usable.
 - [ ] downgrade metadata is rejected.

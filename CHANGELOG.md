@@ -4,6 +4,24 @@ All notable changes to DS5Forge will be documented in this file.
 
 The project currently evolves from the upstream `Casliyan/DS5companion` baseline recorded in `UPSTREAM.md`.
 
+## 0.4.0-rc.5 — Release Candidate 5 — 2026-09-15
+
+### Sidecar teardown and updater safety
+
+- Makes real sidecar process termination authoritative for desktop quit/restart/update flows instead of treating a closed loopback API port as proof that the PyInstaller process tree has exited.
+- Records `CommandEvent::Terminated` per supervisor generation and waits boundedly for the active sidecar generation to finish before reporting `core_stopped`.
+- Adds a Windows-only bounded fallback that runs `taskkill /PID <pid> /T /F` with `CREATE_NO_WINDOW`, killing the PyInstaller wrapper and descendants when graceful shutdown closes the API but leaves processes alive.
+- Fails lifecycle shutdown explicitly if neither graceful process termination nor forced process-tree termination can be confirmed, preventing the updater from starting over a still-running sidecar.
+- Routes application exit through `RunEvent::ExitRequested`; if teardown fails, `prevent_exit()` keeps the shell alive instead of allowing tray Quit to orphan the core.
+- Extends the packaged-core Windows smoke to track the PIDs started for `DS5ForgeCore.exe` and fail if any remain alive after `/lifecycle/stop`.
+- Surfaces successful fallback termination in the lifecycle message for diagnostics instead of silently hiding the degraded shutdown path.
+
+### Validation finding from installed RC2
+
+- After the RC2 shell was no longer running, two `ds5forge-core.exe` processes (the PyInstaller wrapper/child pair) remained alive while port `8765` was already closed.
+- Because the RC2-RC4 shell only waited for loopback-port closure, `stop_core` could return success before the executable process tree actually exited. That is unsafe for an in-place Windows updater because the installer may need to replace a still-loaded `ds5forge-core.exe`.
+- RC4 proves packaged WebSocket transport, but it still inherits the port-only teardown rule. RC5 becomes the first candidate that can be manually validated as a safe updater source; updater E2E then advances from RC5 to a later RC.
+
 ## 0.4.0-rc.4 — Release Candidate 4 — 2026-09-15
 
 ### Packaged realtime transport stabilization
