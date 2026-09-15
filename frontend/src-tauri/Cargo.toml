@@ -1,6 +1,6 @@
 [package]
 name = "ds5forge"
-version = "0.4.0-rc.3"
+version = "0.4.0-rc.4"
 description = "DS5Forge wired DualSense companion shell"
 authors = ["DS5Forge contributors"]
 edition = "2021"
