@@ -169,3 +169,23 @@ USB. A UI e os testes com fakes não substituem a prova física.
   permissão Tauri adicionada;
 - [ ] Windows foreground/SendInput e DualSense USB físico permanecem
   `HARDWARE VALIDATION PENDING` até evidência real ser anexada.
+
+## Registro P4 — productization / release / remote
+
+- [ ] clean per-user NSIS install, reinstall and upgrade;
+- [ ] packaged sidecar reaches API readiness and bounded crash recovery leaves
+  no orphan process;
+- [ ] tray Open/status/Show-Hide/Quit and second-instance focus/restore;
+- [ ] autostart is OFF by default and enable/disable is reversible;
+- [ ] signed update download shows passive Windows progress and failed update
+  leaves the current install usable;
+- [ ] uninstall preserves config/profiles/games/logs and leaves no external
+  listener;
+- [ ] Remote OFF has no active session/tunnel; pairing, exact HTTPS Origin,
+  cookie auth, expiration, revocation and disable were checked;
+- [ ] cloudflared absent/invalid/configured states were diagnosed without any
+  download or raw-token export.
+
+Until a real Windows machine records this section, report exactly
+`WINDOWS VALIDATION PENDING`. USB-dependent P4 teardown remains
+`HARDWARE VALIDATION PENDING`.

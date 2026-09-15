@@ -614,6 +614,79 @@ export const ProfileSaveResponseSchema = z
 export const DeleteProfileResponseSchema = z.object({ deleted: z.string() }).strict();
 export const RumbleTestResponseSchema = z.object({ accepted: z.boolean() }).strict();
 
+export const AppInfoSchema = z
+  .object({
+    name: z.string(),
+    version: z.string(),
+    api_version: z.number().int(),
+    transport_scope: z.literal("usb_wired_only"),
+    platform: z.string(),
+    python: z.string(),
+    release_channel: z.string(),
+    features: z.record(z.string(), z.boolean()),
+  })
+  .strict();
+export const LifecycleSchema = z
+  .object({
+    state: z.string(),
+    core: z.string(),
+    pid: z.number().int().nullable(),
+    message: z.string().nullable(),
+  })
+  .strict();
+export const DiagnosticCheckSchema = z
+  .object({
+    key: z.string(),
+    status: z.enum(["healthy", "warning", "unavailable", "failed", "not_applicable"]),
+    summary: z.string(),
+    action: z.string().nullable(),
+    detail: z.string().nullable(),
+  })
+  .strict();
+export const GuidedDiagnosticsSchema = z
+  .object({
+    status: z.enum(["healthy", "warning", "unavailable", "failed", "not_applicable"]),
+    checks: z.array(DiagnosticCheckSchema),
+    counts: z.record(z.string(), z.number().int()),
+  })
+  .strict();
+export const RemoteSessionSchema = z
+  .object({
+    session_id: z.string(),
+    origin: z.string(),
+    created_at: finiteNumber,
+    expires_at: finiteNumber,
+    expired: z.boolean(),
+    revoked: z.boolean(),
+  })
+  .strict();
+export const RemoteStatusSchema = z
+  .object({
+    enabled: z.boolean(),
+    status: z.string(),
+    origins: z.array(z.string()),
+    sessions: z.array(RemoteSessionSchema),
+    pairing_active: z.boolean(),
+  })
+  .strict();
+export const TunnelStatusSchema = z
+  .object({
+    status: z.string(),
+    executable: z.string().nullable(),
+    config: z.string().nullable(),
+    message: z.string().nullable(),
+  })
+  .strict();
+export const UpdateCheckSchema = z
+  .object({
+    available: z.boolean(),
+    status: z.string(),
+    version: z.string().nullable().optional(),
+    notes: z.string().nullable().optional(),
+    message: z.string().nullable().optional(),
+  })
+  .strict();
+
 export const EventEnvelopeSchema = z
   .object({ type: z.string(), version: z.number().int(), payload: z.unknown() })
   .strict();
@@ -623,6 +696,14 @@ export type ErrorSnapshot = z.infer<typeof ErrorSnapshotSchema>;
 export type Audio = z.infer<typeof AudioSchema>;
 export type HealthState = z.infer<typeof HealthStateSchema>;
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
+export type AppInfo = z.infer<typeof AppInfoSchema>;
+export type Lifecycle = z.infer<typeof LifecycleSchema>;
+export type DiagnosticCheck = z.infer<typeof DiagnosticCheckSchema>;
+export type GuidedDiagnostics = z.infer<typeof GuidedDiagnosticsSchema>;
+export type RemoteSession = z.infer<typeof RemoteSessionSchema>;
+export type RemoteStatus = z.infer<typeof RemoteStatusSchema>;
+export type TunnelStatus = z.infer<typeof TunnelStatusSchema>;
+export type UpdateCheck = z.infer<typeof UpdateCheckSchema>;
 // Input typing keeps the client compatible with P0/P1 snapshots while the
 // schema parser supplies defaults for newly introduced Controller Lab fields.
 export type RuntimeState = z.input<typeof RuntimeStateSchema>;

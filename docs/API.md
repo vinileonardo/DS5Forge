@@ -123,3 +123,32 @@ otherwise the request returns structured `compatibility.unavailable` and the
 previous mode remains unchanged. Conflict diagnostics are process-name
 evidence only, including the caveat that Steam Input may affect a game
 depending on its configuration. No external process is controlled.
+
+## P4 product contracts
+
+The following remain under `/api/v1` and use strict request/response models:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/app/info` | Canonical version, API version, wired scope and feature flags |
+| GET/POST | `/lifecycle`, `/lifecycle/restart`, `/lifecycle/stop` | Product lifecycle and bounded manual core/release control |
+| GET/POST | `/diagnostics/guided`, `/diagnostics/support-bundle` | Guided statuses and sanitized bounded ZIP |
+| POST | `/updates/check` | Validate signed HTTPS metadata and reject downgrades |
+| GET | `/remote/status` | Remote OFF/session/origin state |
+| POST | `/remote/pairing/start` | Local one-use pairing challenge |
+| POST | `/remote/pairing/complete` | Exact HTTPS-origin completion and HttpOnly cookie |
+| POST | `/remote/disable` | Revoke/close sessions and stop tunnel |
+| POST | `/remote/sessions/{id}/revoke` | Revoke one session |
+| GET/PUT/POST | `/tunnel/status`, `/tunnel/configure`, `/tunnel/start`, `/tunnel/stop` | Explicit cloudflared detection/configuration/control |
+
+Remote-origin HTTP and WebSocket requests are admitted only when their exact
+HTTPS Origin is registered and the `ds5forge_session` cookie authenticates the
+same session. Cookies are not accepted from query strings. Local origin-less
+clients retain the existing loopback behavior; an origin-less request whose
+`Host` matches a registered remote origin is still treated as remote and
+requires the same cookie. Unapproved browser origins are rejected before
+commands reach the facade.
+
+JSON request bodies are bounded at 256 KiB before handler dispatch; update,
+pairing and tunnel fields have smaller schema limits. Oversized bodies return
+structured `413 api.payload_too_large`.

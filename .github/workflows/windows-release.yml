@@ -1,0 +1,52 @@
+name: DS5Forge Windows release artifacts
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  build-only:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - run: python -m pip install -e . pyinstaller
+      - run: python scripts/validate_versions.py --expected "${{ github.ref_name }}"
+      - run: python scripts/build_core.py
+      - run: python scripts/prepare_sidecar.py
+      - run: npm ci
+        working-directory: frontend
+      - run: python scripts/build_installer.py --release
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
+      - name: Generate checksums and updater metadata
+        shell: pwsh
+        run: |
+          $bundleDir = "frontend/src-tauri/target/release/bundle/nsis"
+          python scripts/generate_checksums.py $bundleDir --output "$bundleDir/SHA256SUMS.txt"
+          $bundle = Get-ChildItem $bundleDir -Filter "*.nsis.zip" | Select-Object -First 1
+          if (-not $bundle) { throw "No Tauri updater bundle was produced" }
+          $signature = Get-Content "$($bundle.FullName).sig" -Raw
+          $url = "https://github.com/vinileonardo/DS5Forge/releases/download/${{ github.ref_name }}/$($bundle.Name)"
+          python scripts/generate_release_metadata.py --signature $signature --url $url --output "$bundleDir/latest.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ds5forge-${{ github.ref_name }}-windows-artifacts
+          path: |
+            frontend/src-tauri/target/release/bundle/nsis/**
+            source/dist/DS5ForgeCore.exe
+          if-no-files-found: error

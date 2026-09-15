@@ -1,8 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
+import sysconfig
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-SITE = os.path.join(os.path.dirname(os.__file__), "site-packages")
+SITE = sysconfig.get_paths().get("purelib", os.path.join(os.path.dirname(os.__file__), "site-packages"))
 CONSOLE = os.environ.get("DSC_CONSOLE") == "1"
 
 datas = []
@@ -34,7 +35,7 @@ _icon = os.path.join(res_root, "app.ico")
 app_icon = _icon if os.path.exists(_icon) else None
 
 a = Analysis(
-    ["run.py"],
+    ["run_sidecar.py"],
     pathex=[SPECPATH],
     binaries=binaries,
     datas=datas,
@@ -52,7 +53,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="DualSenseCompanion",
+    name="DS5ForgeCore",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

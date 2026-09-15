@@ -9,6 +9,8 @@ from dualsense_companion.api.origins import DEFAULT_ALLOWED_ORIGINS, validate_al
 from dualsense_companion.api.server import validate_loopback_host
 from dualsense_companion.core.config import ConfigRepository
 from dualsense_companion.core.facade import CoreFacade
+from dualsense_companion.core.product import ProductService
+from dualsense_companion.core.remote import RemoteAccessManager
 
 
 class FakeControllerFactory:
@@ -172,6 +174,89 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(explicit_null.status_code, 422)
             nested_null = await client.patch("/api/v1/config", json={"rumble": {"gate": None}})
             self.assertEqual(nested_null.status_code, 422)
+
+    async def test_p4_remote_http_requires_origin_and_session_cookie(self):
+        import httpx
+
+        manager = RemoteAccessManager()
+        product = ProductService(self.facade, remote=manager)
+        app = create_app(self.facade, product=product)
+        transport = httpx.ASGITransport(app=app)
+        local_origin = "http://localhost:5173"
+        remote_origin = "https://remote.example"
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            challenge_response = await client.post(
+                "/api/v1/remote/pairing/start",
+                headers={"Origin": local_origin},
+                json={"origin_hint": remote_origin},
+            )
+            self.assertEqual(challenge_response.status_code, 200)
+            challenge = challenge_response.json()
+
+            complete = await client.post(
+                "/api/v1/remote/pairing/complete",
+                headers={"Origin": remote_origin},
+                json={
+                    "pairing_id": challenge["pairing_id"],
+                    "code": challenge["code"],
+                    "origin": remote_origin,
+                },
+            )
+            self.assertEqual(complete.status_code, 200)
+            cookie = complete.headers["set-cookie"].split(";", 1)[0]
+            self.assertIn("HttpOnly", complete.headers["set-cookie"])
+            self.assertIn("Secure", complete.headers["set-cookie"])
+
+            unauthorized = await client.get(
+                "/api/v1/health",
+                headers={"Origin": remote_origin},
+            )
+            self.assertEqual(unauthorized.status_code, 401)
+            self.assertEqual(unauthorized.headers["access-control-allow-origin"], remote_origin)
+
+            authorized = await client.get(
+                "/api/v1/health",
+                headers={"Origin": remote_origin, "Cookie": cookie},
+            )
+            self.assertEqual(authorized.status_code, 200)
+            self.assertEqual(authorized.headers["access-control-allow-origin"], remote_origin)
+
+            # A tunnel can forward a non-browser client without an Origin
+            # header. The registered Host still identifies the remote origin
+            # and must require the same cookie session.
+            host_unauthorized = await client.get(
+                "/api/v1/health",
+                headers={"Host": "remote.example"},
+            )
+            self.assertEqual(host_unauthorized.status_code, 401)
+            host_authorized = await client.get(
+                "/api/v1/health",
+                headers={"Host": "remote.example", "Cookie": cookie},
+            )
+            self.assertEqual(host_authorized.status_code, 200)
+
+            # With remote access enabled, an origin-less request whose Host is
+            # neither loopback nor a registered origin must not fall through to
+            # trusted local access.
+            unknown_host = await client.get(
+                "/api/v1/health",
+                headers={"Host": "evil.example"},
+            )
+            self.assertEqual(unknown_host.status_code, 401)
+
+            # A genuine loopback origin-less client keeps local trust.
+            local_loopback = await client.get(
+                "/api/v1/health",
+                headers={"Host": "127.0.0.1:8765"},
+            )
+            self.assertEqual(local_loopback.status_code, 200)
+
+            oversized = await client.post(
+                "/api/v1/remote/disable",
+                headers={"Origin": remote_origin, "Cookie": cookie, "Content-Length": str(300_000)},
+                content=b"{}",
+            )
+            self.assertEqual(oversized.status_code, 413)
 
     async def test_commands_and_profiles_happy_path_and_error(self):
         import httpx

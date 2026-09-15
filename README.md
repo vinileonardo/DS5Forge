@@ -194,6 +194,15 @@ Useful frontend gates from `frontend/` are `npm run format:check`,
 
 See [`docs/D0_BASELINE_AND_ROADMAP.md`](docs/D0_BASELINE_AND_ROADMAP.md).
 
+P4 productization contracts and evidence are documented in
+[`docs/P4_EXECUTION_PACK.md`](docs/P4_EXECUTION_PACK.md),
+[`docs/P4_UX_SPEC.md`](docs/P4_UX_SPEC.md) and
+[`docs/P4_VALIDATION.md`](docs/P4_VALIDATION.md). The desktop shell owns the
+packaged headless core sidecar, tray, single-instance, optional autostart, NSIS
+bundle and signed-updater boundary. Remote Access remains OFF by default; the
+local API remains loopback-only and cloudflared is never managed silently. The
+canonical version is in [`VERSION`](VERSION).
+
 The planned delivery is split into five large sprints:
 
 - **P0** — Foundation / Core Authority

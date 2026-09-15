@@ -3,5 +3,20 @@
   "identifier": "main-capability",
   "description": "Minimal window permissions for the DS5Forge frontend shell.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "autostart:default",
+    "process:default",
+    "updater:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "binaries/ds5forge-core",
+          "sidecar": true,
+          "args": ["--headless", "--host", "127.0.0.1", "--port", "8765"]
+        }
+      ]
+    }
+  ]
 }

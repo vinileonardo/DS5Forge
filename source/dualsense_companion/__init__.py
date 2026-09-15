@@ -5,7 +5,7 @@ import logging
 import os
 import sys
 
-__version__ = "1.0.0"
+from .version import __version__ as __version__
 
 # When frozen by PyInstaller, hidapi.dll is bundled at the extraction root.
 # cffi looks it up by name, which won't search that folder, so preload it by

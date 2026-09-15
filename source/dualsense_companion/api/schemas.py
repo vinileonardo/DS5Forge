@@ -608,3 +608,105 @@ class ProfileImportRequest(StrictModel):
 
 def event_envelope(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
     return {"type": event_type, "version": API_VERSION, "payload": dict(payload)}
+
+
+# P4 productization contracts.  They intentionally live beside the existing
+# v1 contracts so the SPA, shell and support tooling share one versioned wire
+# boundary.
+class AppInfoResponse(StrictModel):
+    name: str
+    version: str
+    api_version: int
+    transport_scope: Literal["usb_wired_only"]
+    platform: str
+    python: str
+    release_channel: str
+    features: dict[str, bool]
+
+
+class LifecycleResponse(StrictModel):
+    state: str
+    core: str
+    pid: StrictInt | None
+    message: str | None
+
+
+class DiagnosticCheckResponse(StrictModel):
+    key: str
+    status: Literal["healthy", "warning", "unavailable", "failed", "not_applicable"]
+    summary: str
+    action: str | None
+    detail: str | None
+
+
+class GuidedDiagnosticsResponse(StrictModel):
+    status: Literal["healthy", "warning", "unavailable", "failed", "not_applicable"]
+    checks: list[DiagnosticCheckResponse]
+    counts: dict[str, int]
+
+
+class UpdateCheckRequest(StrictModel):
+    version: StrictStr = Field(max_length=64)
+    notes: StrictStr = Field(default="", max_length=8_192)
+    pub_date: StrictStr | None = None
+    signature: StrictStr = Field(max_length=16_384)
+    installer_url: StrictStr = Field(max_length=2_048)
+    target: StrictStr = Field(default="windows-x86_64", max_length=64)
+
+
+class UpdateCheckResponse(StrictModel):
+    available: StrictBool
+    status: str
+    version: str | None = None
+    notes: str | None = None
+    message: str | None = None
+
+
+class RemotePairingStartRequest(StrictModel):
+    origin_hint: StrictStr | None = Field(default=None, max_length=2_048)
+
+
+class RemotePairingStartResponse(StrictModel):
+    pairing_id: str
+    code: str
+    expires_at: float
+    origin_hint: str | None
+
+
+class RemotePairingCompleteRequest(StrictModel):
+    pairing_id: StrictStr = Field(max_length=128)
+    code: StrictStr = Field(min_length=6, max_length=6)
+    origin: StrictStr = Field(max_length=2_048)
+
+
+class RemoteSessionResponse(StrictModel):
+    session_id: str
+    origin: str
+    created_at: float
+    expires_at: float
+    expired: StrictBool
+    revoked: StrictBool
+
+
+class RemoteStatusResponse(StrictModel):
+    enabled: StrictBool
+    status: str
+    origins: list[str]
+    sessions: list[RemoteSessionResponse]
+    pairing_active: StrictBool
+
+
+class RemoteRevokeResponse(StrictModel):
+    revoked: StrictBool
+
+
+class TunnelConfigureRequest(StrictModel):
+    executable: StrictStr | None = Field(default=None, max_length=512)
+    config_path: StrictStr | None = Field(default=None, max_length=512)
+
+
+class TunnelStatusResponse(StrictModel):
+    status: str
+    executable: str | None
+    config: str | None
+    message: str | None

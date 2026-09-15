@@ -91,8 +91,9 @@ path.
 
 `npm run tauri:build` invokes the normal frontend production build through
 Tauri's `beforeBuildCommand`, so it does not depend on a stale pre-existing
-`dist/`. The shell remains intentionally thin and has no Python sidecar,
-arbitrary process permission, installer, updater, tray or autostart behavior.
+`dist/`. The P1-P3 browser/Tauri development contract was intentionally thin;
+the P4 Windows bundle adds only the explicitly scoped sidecar, process/shell,
+installer, updater, tray and autostart integrations documented in the P4 ADRs.
 
 The PyInstaller baseline remains available on Windows. `source/build.bat` validates that the active interpreter is Python 3.12.x before installing/building:
 
@@ -146,3 +147,22 @@ Run the complete P3 evidence record in [`P3_VALIDATION.md`](P3_VALIDATION.md).
   physical USB and limitation sections in `docs/P2_VALIDATION.md`; automated
   green tests do not substitute for physical DualSense evidence. P3-specific
   results belong in `docs/P3_VALIDATION.md`.
+
+## P4 productization commands
+
+```text
+python3 scripts/validate_versions.py
+python3 scripts/build_core.py                 # Python 3.12 + PyInstaller
+python3 scripts/prepare_sidecar.py            # Windows target-triple copy
+python3 scripts/build_desktop.py              # SPA build
+python3 scripts/build_desktop.py --tauri      # SPA + Tauri bundle
+python3 scripts/build_installer.py            # NSIS; no signing key required
+python3 scripts/build_installer.py --release  # requires CI-only signing keys
+python3 scripts/generate_checksums.py <dir>
+python3 scripts/generate_release_metadata.py --signature <text> --url <https-url>
+```
+
+`VERSION` is canonical. Release scripts never print or persist signing key
+material. The tagged Windows workflow builds artifacts and metadata without
+publishing them. `cloudflared` must be installed/configured by the user; no
+script downloads or updates it.

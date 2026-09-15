@@ -7,8 +7,10 @@ import threading
 from collections.abc import Sequence
 from typing import Any
 
+from . import paths
 from .core.config import ConfigRepository
 from .core.facade import CoreFacade
+from .core.product import ProductService
 from .diagnostics.logging import configure_logging, get_logger
 
 LOGGER = get_logger(__name__)
@@ -43,6 +45,12 @@ class ApplicationRuntime:
 
             facade = create_windows_facade()
         self.facade = facade
+        self.shutdown_event = threading.Event()
+        self.product = ProductService(
+            self.facade,
+            data_dir=paths.config_dir(),
+            on_shutdown=self.shutdown_event.set,
+        )
         self.api_server: Any = None
         self._started = False
 
@@ -53,14 +61,15 @@ class ApplicationRuntime:
         if self.start_api:
             from .api.server import LocalApiServer
 
-            self.api_server = LocalApiServer(self.facade, host=self.host, port=self.port)
+            self.api_server = LocalApiServer(self.facade, host=self.host, port=self.port, product=self.product)
             self.api_server.start()
         self._started = True
 
     def stop(self) -> None:
         if self.api_server is not None:
             self.api_server.stop()
-        self.facade.stop()
+        # Product teardown releases outputs and stops the outbound tunnel child.
+        self.product.stop_core()
         self._started = False
 
 
@@ -76,8 +85,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     runtime.start()
     try:
         if args.headless:
-            stop_event = threading.Event()
-            stop_event.wait()
+            runtime.shutdown_event.wait()
         else:
             # Keep customtkinter optional for headless/CI use and ensure it is
             # never an authority for controller state.

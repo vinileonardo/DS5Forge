@@ -5,6 +5,8 @@ from queue import Empty
 from typing import Any
 
 from ..core.facade import CoreFacade
+from ..core.product import ProductService
+from ..core.remote import is_loopback_host, validate_remote_origin
 from ..diagnostics.logging import get_logger
 from ..domain.errors import DS5ForgeError, ErrorCode
 from ..domain.models import AdaptiveTriggerEffect, LightbarState, StickCalibration, TriggerState
@@ -12,6 +14,7 @@ from .origins import DEFAULT_ALLOWED_ORIGINS, validate_allowed_origins
 from .schemas import (
     API_PREFIX,
     ActiveGameResponse,
+    AppInfoResponse,
     AutomationResponse,
     AutomationUpdateRequest,
     ChordsResponse,
@@ -33,9 +36,11 @@ from .schemas import (
     GamesResponse,
     GestureConfigRequest,
     GestureConfigResponse,
+    GuidedDiagnosticsResponse,
     HapticsTestRequest,
     HapticsTestRunResponse,
     HealthResponse,
+    LifecycleResponse,
     LightbarApplyRequest,
     LightbarResponse,
     MappingsResponse,
@@ -44,6 +49,12 @@ from .schemas import (
     ProfileLoadResponse,
     ProfileSaveResponse,
     ProfilesResponse,
+    RemotePairingCompleteRequest,
+    RemotePairingStartRequest,
+    RemotePairingStartResponse,
+    RemoteRevokeResponse,
+    RemoteSessionResponse,
+    RemoteStatusResponse,
     RumbleConfigPatch,
     RumbleTestCommand,
     RumbleTestResponse,
@@ -56,12 +67,22 @@ from .schemas import (
     TriggerPreviewRequest,
     TriggerPreviewResponse,
     TriggerStateResponse,
+    TunnelConfigureRequest,
+    TunnelStatusResponse,
+    UpdateCheckRequest,
+    UpdateCheckResponse,
 )
 
 LOGGER = get_logger(__name__)
+MAX_JSON_BODY_BYTES = 256 * 1024
 
 
-def create_app(facade: CoreFacade, *, allowed_origins: tuple[str, ...] = DEFAULT_ALLOWED_ORIGINS) -> Any:
+def create_app(
+    facade: CoreFacade,
+    *,
+    allowed_origins: tuple[str, ...] = DEFAULT_ALLOWED_ORIGINS,
+    product: ProductService | None = None,
+) -> Any:
     """Build the loopback API without starting a server.
 
     FastAPI is imported here, rather than at package import time, so the
@@ -69,22 +90,32 @@ def create_app(facade: CoreFacade, *, allowed_origins: tuple[str, ...] = DEFAULT
     """
 
     try:
-        from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+        from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
         from fastapi.exceptions import RequestValidationError
         from fastapi.middleware.cors import CORSMiddleware
     except ImportError as exc:  # pragma: no cover - depends on environment
         raise RuntimeError("Install the 'api' dependencies to use the HTTP API: fastapi and uvicorn.") from exc
 
     validated_origins = validate_allowed_origins(allowed_origins)
+    product = product or ProductService(facade)
     app = FastAPI(title="DS5Forge Local API", version="1.0.0", docs_url=f"{API_PREFIX}/docs")
     if validated_origins:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=list(validated_origins),
-            allow_credentials=False,
-            allow_methods=["GET", "PUT", "PATCH", "POST", "DELETE"],
+            allow_credentials=True,
+            allow_methods=["GET", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
             allow_headers=["Content-Type"],
         )
+
+    def add_remote_cors(response: Any, origin: str | None) -> Any:
+        if origin is not None:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Allow-Methods"] = "GET, PUT, PATCH, POST, DELETE, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+            response.headers["Vary"] = "Origin"
+        return response
 
     @app.middleware("http")
     async def enforce_browser_origin(request: Request, call_next: Any) -> Any:
@@ -94,7 +125,25 @@ def create_app(facade: CoreFacade, *, allowed_origins: tuple[str, ...] = DEFAULT
         # explicitly carries an unapproved Origin before a command reaches the
         # core. Origin-less native/local clients remain supported.
         origin = request.headers.get("origin")
-        if origin is not None and origin not in validated_origins:
+        pairing_complete = request.url.path == f"{API_PREFIX}/remote/pairing/complete"
+        host_header = request.headers.get("host")
+        remote_origin = product.remote.origin_allowed(origin)
+        host_origin = product.remote.origin_for_host(host_header)
+        # With remote access enabled, an origin-less request is only trusted as
+        # local when its Host is loopback. A forwarded Host that is neither
+        # loopback nor a registered origin must authenticate instead of falling
+        # through to unauthenticated local access.
+        unknown_remote_host = product.remote.enabled and not is_loopback_host(host_header)
+        remote_request = remote_origin or host_origin is not None or unknown_remote_host
+        pairing_origin = False
+        if pairing_complete and origin is not None:
+            try:
+                validate_remote_origin(origin)
+                pairing_origin = True
+            except ValueError:
+                pairing_origin = False
+        trusted_remote = remote_request or pairing_origin
+        if origin is not None and origin not in validated_origins and not trusted_remote:
             LOGGER.warning("http origin rejected", extra={"event": "http.origin_rejected", "origin": origin})
             return _json_response(
                 403,
@@ -106,7 +155,65 @@ def create_app(facade: CoreFacade, *, allowed_origins: tuple[str, ...] = DEFAULT
                     "fields": {},
                 },
             )
-        return await call_next(request)
+        raw_length = request.headers.get("content-length")
+        if raw_length is not None:
+            try:
+                content_length = int(raw_length)
+            except ValueError:
+                return _json_response(
+                    400,
+                    {
+                        "code": "api.invalid_content_length",
+                        "message": "The request Content-Length is invalid.",
+                        "detail": None,
+                        "recoverable": True,
+                        "fields": {},
+                    },
+                )
+            if content_length > MAX_JSON_BODY_BYTES:
+                response = _json_response(
+                    413,
+                    {
+                        "code": "api.payload_too_large",
+                        "message": "The request payload exceeds the bounded API limit.",
+                        "detail": None,
+                        "recoverable": True,
+                        "fields": {"body": f"maximum {MAX_JSON_BODY_BYTES} bytes"},
+                    },
+                )
+                return add_remote_cors(response, origin) if trusted_remote else response
+        if remote_request and origin is not None and not remote_origin and not pairing_complete:
+            response = _json_response(
+                403,
+                {
+                    "code": "api.origin_rejected",
+                    "message": "The browser origin does not match the registered remote origin.",
+                    "detail": None,
+                    "recoverable": False,
+                    "fields": {},
+                },
+            )
+            return add_remote_cors(response, origin) if trusted_remote else response
+        if remote_request and request.method != "OPTIONS" and not pairing_complete:
+            token = product.remote.token_from_cookie(request.headers.get("cookie"))
+            authentication_origin = origin if remote_origin else host_origin
+            if not product.remote.authenticate(token, authentication_origin):
+                response = _json_response(
+                    401,
+                    {
+                        "code": "remote.authentication_required",
+                        "message": "This remote origin requires an authenticated DS5Forge session.",
+                        "detail": None,
+                        "recoverable": True,
+                        "fields": {},
+                    },
+                )
+                return add_remote_cors(response, origin)
+        if trusted_remote and request.method == "OPTIONS":
+            response = Response(status_code=204)
+        else:
+            response = await call_next(request)
+        return add_remote_cors(response, origin) if trusted_remote else response
 
     @app.exception_handler(DS5ForgeError)
     async def handle_domain_error(_request: Any, exc: DS5ForgeError) -> Any:
@@ -139,6 +246,95 @@ def create_app(facade: CoreFacade, *, allowed_origins: tuple[str, ...] = DEFAULT
     @app.get(f"{API_PREFIX}/health", response_model=HealthResponse)
     async def health() -> dict[str, Any]:
         return facade.health_dict()
+
+    @app.get(f"{API_PREFIX}/app/info", response_model=AppInfoResponse)
+    async def app_info() -> dict[str, Any]:
+        return product.app_info()
+
+    @app.get(f"{API_PREFIX}/lifecycle", response_model=LifecycleResponse)
+    async def lifecycle() -> dict[str, Any]:
+        return product.lifecycle()
+
+    @app.post(f"{API_PREFIX}/lifecycle/restart", response_model=LifecycleResponse)
+    async def restart_core() -> dict[str, Any]:
+        return product.restart_core()
+
+    @app.post(f"{API_PREFIX}/lifecycle/stop", response_model=LifecycleResponse)
+    async def stop_core() -> dict[str, Any]:
+        return product.stop_core()
+
+    @app.get(f"{API_PREFIX}/diagnostics/guided", response_model=GuidedDiagnosticsResponse)
+    async def guided_diagnostics() -> dict[str, Any]:
+        return product.guided_diagnostics()
+
+    @app.post(f"{API_PREFIX}/diagnostics/support-bundle")
+    async def support_bundle() -> Any:
+        from fastapi.responses import Response as FastApiResponse
+
+        return FastApiResponse(
+            content=product.support_bundle(),
+            media_type="application/zip",
+            headers={"Content-Disposition": 'attachment; filename="ds5forge-support-bundle.zip"'},
+        )
+
+    @app.post(f"{API_PREFIX}/updates/check", response_model=UpdateCheckResponse)
+    async def check_update(payload: UpdateCheckRequest) -> dict[str, Any]:
+        return product.check_update(payload.model_dump())
+
+    @app.get(f"{API_PREFIX}/remote/status", response_model=RemoteStatusResponse)
+    async def remote_status() -> dict[str, Any]:
+        return product.remote_status()
+
+    @app.post(f"{API_PREFIX}/remote/pairing/start", response_model=RemotePairingStartResponse)
+    async def start_remote_pairing(payload: RemotePairingStartRequest | None = None) -> dict[str, Any]:
+        challenge = product.remote.start_pairing(origin_hint=payload.origin_hint if payload else None)
+        return challenge.public_dict()
+
+    @app.post(f"{API_PREFIX}/remote/pairing/complete", response_model=RemoteSessionResponse)
+    async def complete_remote_pairing(payload: RemotePairingCompleteRequest, response: Response) -> dict[str, Any]:
+        try:
+            session, token = product.remote.complete_pairing(payload.pairing_id, payload.code, payload.origin)
+        except ValueError as exc:
+            raise DS5ForgeError(
+                code=ErrorCode.API_VALIDATION,
+                message="Remote pairing could not be completed.",
+                detail=str(exc),
+                fields={"pairing_id": "invalid or expired"},
+            ) from exc
+        response.headers["Set-Cookie"] = product.remote.cookie_header(token)
+        return session.public_dict(product.remote.now())
+
+    @app.post(f"{API_PREFIX}/remote/disable", response_model=RemoteStatusResponse)
+    async def disable_remote() -> dict[str, Any]:
+        return product.disable_remote()
+
+    @app.post(f"{API_PREFIX}/remote/sessions/{{session_id}}/revoke", response_model=RemoteRevokeResponse)
+    async def revoke_remote_session(session_id: str) -> dict[str, Any]:
+        return {"revoked": product.remote.revoke(session_id)}
+
+    @app.get(f"{API_PREFIX}/tunnel/status", response_model=TunnelStatusResponse)
+    async def tunnel_status() -> dict[str, Any]:
+        return product.tunnel_status()
+
+    @app.put(f"{API_PREFIX}/tunnel/configure", response_model=TunnelStatusResponse)
+    async def configure_tunnel(payload: TunnelConfigureRequest) -> dict[str, Any]:
+        try:
+            return product.configure_tunnel(payload.executable, payload.config_path)
+        except ValueError as exc:
+            raise DS5ForgeError(
+                code=ErrorCode.API_VALIDATION,
+                message="Tunnel configuration is invalid.",
+                detail=str(exc),
+                fields={},
+            ) from exc
+
+    @app.post(f"{API_PREFIX}/tunnel/start", response_model=TunnelStatusResponse)
+    async def start_tunnel() -> dict[str, Any]:
+        return product.start_tunnel()
+
+    @app.post(f"{API_PREFIX}/tunnel/stop", response_model=TunnelStatusResponse)
+    async def stop_tunnel() -> dict[str, Any]:
+        return product.stop_tunnel()
 
     @app.get(f"{API_PREFIX}/state", response_model=RuntimeStateResponse)
     async def state() -> dict[str, Any]:
@@ -395,8 +591,22 @@ def create_app(facade: CoreFacade, *, allowed_origins: tuple[str, ...] = DEFAULT
     @app.websocket(f"{API_PREFIX}/ws")
     async def websocket(websocket: WebSocket) -> None:
         origin = websocket.headers.get("origin")
-        if origin is not None and origin not in validated_origins:
+        host_header = websocket.headers.get("host")
+        remote_origin = product.remote.origin_allowed(origin)
+        host_origin = product.remote.origin_for_host(host_header)
+        unknown_remote_host = product.remote.enabled and not is_loopback_host(host_header)
+        remote_request = remote_origin or host_origin is not None or unknown_remote_host
+        if origin is not None and origin not in validated_origins and not remote_origin:
             LOGGER.warning("websocket origin rejected", extra={"event": "websocket.origin_rejected"})
+            await websocket.close(code=1008)
+            return
+        if remote_request and origin is not None and not remote_origin:
+            await websocket.close(code=1008)
+            return
+        if remote_request and not product.remote.authenticate(
+            product.remote.token_from_cookie(websocket.headers.get("cookie")),
+            origin if remote_origin else host_origin,
+        ):
             await websocket.close(code=1008)
             return
         await websocket.accept()
@@ -426,13 +636,16 @@ def create_app(facade: CoreFacade, *, allowed_origins: tuple[str, ...] = DEFAULT
                     # remain HTTP-only in P0; ignore the frame after validating
                     # that the socket is still open.
                     try:
-                        receive_task.result()
+                        frame = receive_task.result()
                     except WebSocketDisconnect:
                         raise
                     except Exception:
                         # A malformed/unsupported client frame is not a
                         # controller command; keep the socket alive.
                         continue
+                    if len(frame) > 8_192:
+                        await websocket.close(code=1009)
+                        return
                     continue
                 try:
                     event = event_task.result()

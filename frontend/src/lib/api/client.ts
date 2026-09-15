@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  AppInfoSchema,
   ConfigSchema,
   AutomationStateSchema,
   ChordsResponseSchema,
@@ -13,21 +14,28 @@ import {
   GameMatchResponseSchema,
   GamesResponseSchema,
   FullControllerProfileSchema,
+  GuidedDiagnosticsSchema,
   GestureConfigSchema,
   HapticsTestRunSchema,
   LightbarSchema,
   MappingsResponseSchema,
   DeleteProfileResponseSchema,
   HealthResponseSchema,
+  LifecycleSchema,
   ProfileLoadResponseSchema,
   ProfileSaveResponseSchema,
   ProfilesResponseSchema,
   RumbleTestResponseSchema,
+  RemoteSessionSchema,
+  RemoteStatusSchema,
   RuntimeStateSchema,
   StickCalibrationSchema,
   TriggerPreviewSchema,
   TriggerStateSchema,
+  TunnelStatusSchema,
+  UpdateCheckSchema,
   type AutomationState,
+  type AppInfo,
   type Chord,
   type CompatibilityState,
   type ConflictDiagnostic,
@@ -37,9 +45,12 @@ import {
   type ControllerProfile,
   type ControllerTelemetry,
   type GestureConfig,
+  type GuidedDiagnostics,
   type LightbarState,
+  type Lifecycle,
   type RumbleConfig,
   type RuntimeState,
+  type RemoteStatus,
   type StickCalibration,
   type TriggerEffect,
 } from "./contracts";
@@ -48,21 +59,30 @@ import { ApiError, ApiProtocolError } from "./errors";
 export const DEFAULT_API_BASE_URL = "http://127.0.0.1:8765/api/v1";
 
 function validateApiBaseUrl(raw: string | undefined): string {
-  const candidate = raw?.trim() || DEFAULT_API_BASE_URL;
+  const browserOrigin = typeof window !== "undefined" ? window.location.origin : "";
+  const browserHost = typeof window !== "undefined" ? window.location.hostname : "";
+  const localBrowser = ["localhost", "127.0.0.1", "[::1]", "tauri.localhost"].includes(browserHost);
+  const candidate =
+    raw?.trim() || (!localBrowser && browserOrigin ? `${browserOrigin}/api/v1` : DEFAULT_API_BASE_URL);
   let parsed: URL;
   try {
     parsed = new URL(candidate);
   } catch (error) {
     throw new ApiProtocolError("The configured API URL is not valid.", error);
   }
-  if (
-    !["http:", "https:"].includes(parsed.protocol) ||
-    !["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)
-  ) {
-    throw new ApiProtocolError("The DS5Forge API URL must point to a local loopback host.");
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname);
+  const sameOriginRemote =
+    !localBrowser && browserOrigin.startsWith("https:") && parsed.origin === browserOrigin;
+  if (!(["http:", "https:"].includes(parsed.protocol) && (loopback || sameOriginRemote))) {
+    throw new ApiProtocolError(
+      "The DS5Forge API URL must point to loopback or the current HTTPS remote origin.",
+    );
   }
   if (parsed.username || parsed.password || parsed.search || parsed.hash) {
     throw new ApiProtocolError("The DS5Forge API URL may not contain credentials or query parameters.");
+  }
+  if (parsed.pathname.replace(/\/$/, "") !== "/api/v1") {
+    throw new ApiProtocolError("The DS5Forge API URL must end at /api/v1.");
   }
   return candidate.replace(/\/$/, "");
 }
@@ -93,6 +113,7 @@ async function request<T>(
 ): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
+    credentials: "include",
     headers: {
       Accept: "application/json",
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
@@ -130,6 +151,76 @@ const jsonPost = (value?: unknown): RequestInit => ({
 });
 
 export const api = {
+  appInfo: () => request<AppInfo>("/app/info", AppInfoSchema),
+  lifecycle: () => request<Lifecycle>("/lifecycle", LifecycleSchema),
+  restartCore: () => request<Lifecycle>("/lifecycle/restart", LifecycleSchema, jsonPost()),
+  guidedDiagnostics: () => request<GuidedDiagnostics>("/diagnostics/guided", GuidedDiagnosticsSchema),
+  supportBundle: async (): Promise<Blob> => {
+    const response = await fetch(`${API_BASE_URL}/diagnostics/support-bundle`, {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/zip" },
+    });
+    if (!response.ok) {
+      throw new ApiError(response.status, {
+        code: "support_bundle.failed",
+        message: "Support Bundle export failed.",
+        detail: null,
+        recoverable: true,
+        fields: {},
+      });
+    }
+    return response.blob();
+  },
+  checkUpdate: (payload: {
+    version: string;
+    notes?: string;
+    pub_date?: string | null;
+    signature: string;
+    installer_url: string;
+    target?: string;
+  }) =>
+    request("/updates/check", UpdateCheckSchema, {
+      ...jsonPost(payload),
+      headers: { "Content-Type": "application/json" },
+    }),
+  remoteStatus: () => request<RemoteStatus>("/remote/status", RemoteStatusSchema),
+  startPairing: (origin_hint?: string) =>
+    request(
+      "/remote/pairing/start",
+      z
+        .object({
+          pairing_id: z.string(),
+          code: z.string(),
+          expires_at: z.number().finite(),
+          origin_hint: z.string().nullable(),
+        })
+        .strict(),
+      {
+        ...jsonPost(origin_hint ? { origin_hint } : {}),
+        headers: { "Content-Type": "application/json" },
+      },
+    ),
+  completePairing: (pairing_id: string, code: string, origin: string) =>
+    request("/remote/pairing/complete", RemoteSessionSchema, {
+      ...jsonPost({ pairing_id, code, origin }),
+      headers: { "Content-Type": "application/json" },
+    }),
+  disableRemote: () => request<RemoteStatus>("/remote/disable", RemoteStatusSchema, jsonPost()),
+  revokeRemote: (sessionId: string) =>
+    request(
+      `/remote/sessions/${encodeURIComponent(sessionId)}/revoke`,
+      z.object({ revoked: z.boolean() }).strict(),
+      jsonPost(),
+    ),
+  tunnelStatus: () => request("/tunnel/status", TunnelStatusSchema),
+  configureTunnel: (executable: string | null, config_path: string | null) =>
+    request("/tunnel/configure", TunnelStatusSchema, {
+      ...jsonPut({ executable, config_path }),
+      headers: { "Content-Type": "application/json" },
+    }),
+  startTunnel: () => request("/tunnel/start", TunnelStatusSchema, jsonPost()),
+  stopTunnel: () => request("/tunnel/stop", TunnelStatusSchema, jsonPost()),
   health: () => request("/health", HealthResponseSchema),
   state: () => request("/state", RuntimeStateSchema),
   games: () => request("/games", GamesResponseSchema),

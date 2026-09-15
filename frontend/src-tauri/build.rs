@@ -32,7 +32,7 @@ fn placeholder_icon_bytes() -> Vec<u8> {
     const WIDTH: u32 = 32;
     const HEIGHT: u32 = 32;
     const PIXEL_BYTES: u32 = WIDTH * HEIGHT * 4;
-    const MASK_ROW_BYTES: u32 = ((WIDTH + 31) / 32) * 4;
+    const MASK_ROW_BYTES: u32 = WIDTH.div_ceil(32) * 4;
     const MASK_BYTES: u32 = MASK_ROW_BYTES * HEIGHT;
     const DIB_BYTES: u32 = 40 + PIXEL_BYTES + MASK_BYTES;
     const IMAGE_OFFSET: u32 = 6 + 16;

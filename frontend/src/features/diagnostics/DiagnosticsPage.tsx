@@ -1,6 +1,17 @@
-import { Activity, AlertTriangle, Cable, CircleCheck, Radio, RefreshCw, Server, Volume2 } from "lucide-react";
+import {
+  Activity,
+  AlertTriangle,
+  Cable,
+  CircleCheck,
+  Download,
+  Radio,
+  RefreshCw,
+  Server,
+  Volume2,
+} from "lucide-react";
+import { useEffect, useState } from "react";
 import { useRuntime } from "../../lib/runtime/RuntimeProvider";
-import { API_BASE_URL } from "../../lib/api/client";
+import { api, API_BASE_URL } from "../../lib/api/client";
 import { Button, Card, EmptyState, Notice, PageHeader, StatusPill } from "../../components/ui";
 
 function tone(value: string): "success" | "warning" | "danger" | "neutral" {
@@ -29,6 +40,32 @@ export function DiagnosticsPage() {
   } = useRuntime();
   const subsystems = runtime?.health.subsystems ?? health?.subsystems ?? {};
   const lastError = runtime?.last_error;
+  const [guided, setGuided] = useState<Awaited<ReturnType<typeof api.guidedDiagnostics>> | null>(null);
+  const [bundleMessage, setBundleMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (coreStatus !== "online") return;
+    void api
+      .guidedDiagnostics()
+      .then(setGuided)
+      .catch(() => setGuided(null));
+  }, [coreStatus, lastReconnectAt]);
+
+  async function exportBundle() {
+    setBundleMessage(null);
+    try {
+      const blob = await api.supportBundle();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "ds5forge-support-bundle.zip";
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setBundleMessage("Support Bundle ready. Sensitive values and paths were redacted.");
+    } catch {
+      setBundleMessage("Support Bundle export failed; the current installation was not changed.");
+    }
+  }
 
   return (
     <>
@@ -50,6 +87,30 @@ export function DiagnosticsPage() {
         </Notice>
       )}
       <div className="diagnostic-grid">
+        <Card>
+          <div className="card-header">
+            <div>
+              <h2>Guided checks</h2>
+              <p>Actionable product checks with explicit unavailable and not-applicable states.</p>
+            </div>
+            <CircleCheck size={18} color="var(--success)" />
+          </div>
+          {guided ? (
+            <div className="subsystem-list">
+              {guided.checks.map((check) => (
+                <div className="subsystem" key={check.key}>
+                  <span>
+                    {check.key}
+                    <small>{check.summary}</small>
+                  </span>
+                  <StatusPill tone={tone(check.status)} label={check.status} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="muted">Run after the local core is reachable.</p>
+          )}
+        </Card>
         <Card>
           <div className="card-header">
             <div>
@@ -181,6 +242,26 @@ export function DiagnosticsPage() {
         </Card>
       </div>
       <div className="stack" style={{ marginTop: 18 }}>
+        <Card>
+          <div className="card-header">
+            <div>
+              <h2>Support Bundle</h2>
+              <p>
+                Bounded ZIP containing versions, health, lifecycle, capabilities, diagnostics, schemas,
+                packaging and remote status.
+              </p>
+            </div>
+            <Download size={18} color="var(--accent)" />
+          </div>
+          <Button variant="quiet" onClick={() => void exportBundle()}>
+            <Download size={15} /> Export Support Bundle
+          </Button>
+          {bundleMessage && (
+            <p className="muted" role="status">
+              {bundleMessage}
+            </p>
+          )}
+        </Card>
         <Card>
           <div className="card-header">
             <div>

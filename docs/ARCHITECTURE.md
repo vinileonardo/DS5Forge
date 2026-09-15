@@ -142,3 +142,19 @@ tunnel, installer, updater or new Tauri permission in P3. Virtual/XInput is
 modeled but unavailable in production because no approved provider with safe
 physical suppression is installed. Windows and physical DualSense USB proof
 remain `HARDWARE VALIDATION PENDING`.
+
+## P4 productization boundary
+
+The Python `ProductService` composes product contracts around the existing
+facade without taking hardware ownership. `CoreSupervisor` models bounded
+desktop/core startup, readiness, crash recovery and shutdown; the Tauri shell
+uses the same lifecycle vocabulary while tracking the actual sidecar process.
+`GuidedDiagnostics`, `RemoteAccessManager`, `CloudflaredManager`, update
+metadata validation and Support Bundle generation are independently testable
+and fail closed.
+
+The Tauri shell registers single-instance first, then the fixed sidecar shell,
+autostart, updater and tray. The bundle target is per-user NSIS. The only
+external process path is the packaged headless core with fixed loopback
+arguments. Remote Access and cloudflared are disabled until explicitly paired
+and configured; the core API never changes from loopback.

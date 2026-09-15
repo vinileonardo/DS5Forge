@@ -34,11 +34,13 @@ class LocalApiServer:
         host: str = "127.0.0.1",
         port: int = 8765,
         allowed_origins: tuple[str, ...] = DEFAULT_ALLOWED_ORIGINS,
+        product: Any | None = None,
     ) -> None:
         self.facade = facade
         self.host = validate_loopback_host(host)
         self.port = validate_port(port)
         self.allowed_origins = validate_allowed_origins(allowed_origins)
+        self.product = product
         self._server: Any = None
         self._thread: threading.Thread | None = None
 
@@ -57,7 +59,7 @@ class LocalApiServer:
         try:
             from .http import create_app
 
-            app = create_app(self.facade, allowed_origins=self.allowed_origins)
+            app = create_app(self.facade, allowed_origins=self.allowed_origins, product=self.product)
         except RuntimeError as exc:
             LOGGER.warning("local API unavailable", extra={"event": "api.unavailable", "error": str(exc)})
             return False

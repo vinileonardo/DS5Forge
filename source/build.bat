@@ -1,6 +1,6 @@
 @echo off
 setlocal
-REM Build DualSenseCompanion.exe (self-contained, no Python needed to run it).
+REM Build the DS5ForgeCore.exe sidecar (self-contained, no Python needed to run it).
 cd /d "%~dp0"
 
 python -c "import sys; raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)"
@@ -17,5 +17,5 @@ python -m PyInstaller build.spec --distpath dist --workpath build_tmp --noconfir
 if errorlevel 1 exit /b 1
 
 echo.
-echo Done. The executable is in dist\DualSenseCompanion.exe
+echo Done. The executable is in dist\DS5ForgeCore.exe
 endlocal
