@@ -19,6 +19,8 @@ from dualsense_companion.core.tunnel import CloudflaredManager, TunnelStatus
 from dualsense_companion.core.updates import UpdateMetadata, evaluate_update
 from dualsense_companion.diagnostics.logging import configure_logging, get_logger, recent_logs
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 class FakeClock:
     def __init__(self) -> None:
@@ -302,3 +304,49 @@ class P4ProductizationTests(unittest.TestCase):
         self.assertEqual(tunnel.stop_count, 0)
         self.assertEqual(shutdowns, [])
         self.assertEqual(status["state"], "application_ready")
+
+
+class TestTauriReleaseContract(unittest.TestCase):
+    """Guards config/dependency regressions that only native Rust compilation exposes."""
+
+    def test_tauri_cargo_manifest_declares_generate_context_dependency(self) -> None:
+        manifest = (ROOT / "frontend/src-tauri/Cargo.toml").read_text(encoding="utf-8")
+        # tauri::generate_context! expands to code that references serde_json in
+        # the crate root; omitting the direct dependency breaks native cargo check.
+        self.assertRegex(manifest, r'(?m)^serde_json\s*=\s*"1"')
+
+    def test_cargo_lock_resolves_desktop_plugins(self) -> None:
+        lock = (ROOT / "frontend/src-tauri/Cargo.lock").read_text(encoding="utf-8")
+        for plugin in (
+            "tauri-plugin-autostart",
+            "tauri-plugin-process",
+            "tauri-plugin-shell",
+            "tauri-plugin-single-instance",
+            "tauri-plugin-updater",
+        ):
+            self.assertIn(f'name = "{plugin}"', lock)
+
+    def test_tauri_updater_plugin_has_deserializable_config(self) -> None:
+        config = json.loads((ROOT / "frontend/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
+        updater = config["plugins"]["updater"]
+        # tauri-plugin-updater declares `pubkey: String` with no serde default.
+        # Without this key the app panics while initializing plugins at startup.
+        self.assertIn("pubkey", updater)
+        self.assertIsInstance(updater["pubkey"], str)
+        self.assertIsInstance(updater.get("endpoints", []), list)
+
+    def test_tauri_capabilities_stay_minimal(self) -> None:
+        capabilities = json.loads((ROOT / "frontend/src-tauri/capabilities/default.json").read_text(encoding="utf-8"))
+        permissions = capabilities["permissions"]
+        self.assertIn("core:default", permissions)
+        identifiers = [item if isinstance(item, str) else item.get("identifier") for item in permissions]
+        self.assertNotIn("shell:default", identifiers)
+        self.assertNotIn("shell:allow-open", identifiers)
+        self.assertNotIn("fs:default", identifiers)
+        allowed_execute = next(item for item in permissions if isinstance(item, dict))
+        self.assertEqual(allowed_execute["identifier"], "shell:allow-execute")
+        self.assertTrue(allowed_execute["allow"][0]["sidecar"])
+        self.assertEqual(
+            allowed_execute["allow"][0]["args"],
+            ["--headless", "--host", "127.0.0.1", "--port", "8765"],
+        )
