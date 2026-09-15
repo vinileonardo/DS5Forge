@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import runpy
 import tempfile
 import unittest
 import zipfile
@@ -353,6 +354,74 @@ class TestTauriReleaseContract(unittest.TestCase):
         self.assertIn('"createUpdaterArtifacts": True', installer)
         self.assertIn('-Filter "*-setup.exe"', workflow)
         self.assertNotIn("*.nsis.zip", workflow)
+
+    def test_release_build_uses_separate_rc_and_stable_update_channels(self) -> None:
+        installer = runpy.run_path(str(ROOT / "scripts/build_installer.py"))
+        self.assertEqual(
+            installer["updater_endpoint"]("0.4.0-rc.1"),
+            "https://github.com/vinileonardo/DS5Forge/releases/download/update-rc/latest.json",
+        )
+        self.assertEqual(
+            installer["updater_endpoint"]("0.4.0"),
+            "https://github.com/vinileonardo/DS5Forge/releases/latest/download/latest.json",
+        )
+
+    def test_release_workflow_publishes_versioned_release_and_refreshes_rc_channel(self) -> None:
+        workflow = (ROOT / ".github/workflows/windows-release.yml").read_text(encoding="utf-8")
+        publisher = runpy.run_path(str(ROOT / "scripts/publish_github_release.py"))
+        self.assertIn("permissions:\n  contents: write", workflow)
+        self.assertIn("Publish GitHub Release and updater channel", workflow)
+        self.assertIn("python scripts/publish_github_release.py", workflow)
+        self.assertEqual(publisher["RC_CHANNEL_TAG"], "update-rc")
+        self.assertTrue(publisher["is_prerelease"]("v0.4.0-rc.1"))
+        self.assertFalse(publisher["is_prerelease"]("v0.4.0"))
+        with self.assertRaises(ValueError):
+            publisher["is_prerelease"]("0.4.0-rc.1")
+
+    def test_release_publisher_requires_one_complete_nsis_asset_set(self) -> None:
+        publisher = runpy.run_path(str(ROOT / "scripts/publish_github_release.py"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundle = root / "bundle"
+            bundle.mkdir()
+            installer = bundle / "DS5Forge_0.4.0-rc.1_x64-setup.exe"
+            core = root / "DS5ForgeCore.exe"
+            for path in (
+                installer,
+                Path(f"{installer}.sig"),
+                bundle / "latest.json",
+                bundle / "SHA256SUMS.txt",
+                core,
+            ):
+                path.write_text("fixture", encoding="utf-8")
+            assets = publisher["release_assets"](bundle, core)
+            self.assertEqual(assets[0], installer)
+            self.assertEqual(len(assets), 5)
+            (bundle / "duplicate-setup.exe").write_text("fixture", encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                publisher["release_assets"](bundle, core)
+
+    def test_release_publisher_marks_rc_and_stable_releases_correctly(self) -> None:
+        publisher = runpy.run_path(str(ROOT / "scripts/publish_github_release.py"))
+        commands: list[list[str]] = []
+
+        def fake_run_gh(args: list[str], *, capture: bool = False, check: bool = True) -> Any:
+            commands.append(args)
+            return SimpleNamespace(returncode=1 if args[:2] == ["release", "view"] else 0, stderr="")
+
+        publish = publisher["publish_versioned_release"]
+        publish.__globals__["run_gh"] = fake_run_gh
+        assets = [Path("DS5Forge-setup.exe")]
+        publish("v0.4.0-rc.1", "owner/repo", assets)
+        rc_create = next(command for command in commands if command[:2] == ["release", "create"])
+        self.assertIn("--prerelease", rc_create)
+        self.assertIn("--latest=false", rc_create)
+
+        commands.clear()
+        publish("v0.4.0", "owner/repo", assets)
+        stable_create = next(command for command in commands if command[:2] == ["release", "create"])
+        self.assertIn("--latest", stable_create)
+        self.assertNotIn("--prerelease", stable_create)
 
     def test_tauri_capabilities_stay_minimal(self) -> None:
         capabilities = json.loads((ROOT / "frontend/src-tauri/capabilities/default.json").read_text(encoding="utf-8"))

@@ -163,6 +163,10 @@ python3 scripts/generate_release_metadata.py --signature <text> --url <https-url
 ```
 
 `VERSION` is canonical. Release scripts never print or persist signing key
-material. The tagged Windows workflow builds artifacts and metadata without
-publishing them. `cloudflared` must be installed/configured by the user; no
-script downloads or updates it.
+material. The tagged Windows workflow builds signed updater artifacts, uploads
+the CI artifact bundle and publishes the matching GitHub Release. Prerelease
+builds embed the fixed `update-rc` metadata endpoint; stable builds embed
+GitHub's `releases/latest` endpoint. The workflow refreshes `update-rc` for each
+RC and once again for the stable release so RC installs can upgrade into the
+final version. `cloudflared` must be installed/configured by the user; no script
+downloads or updates it.

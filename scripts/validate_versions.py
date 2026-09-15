@@ -26,6 +26,13 @@ def read_declared_version(path: Path, pattern: str) -> str:
     return match.group(1)
 
 
+def read_cargo_lock_package_version(path: Path, package: str) -> str:
+    """Return one package version from Cargo.lock without requiring a TOML dependency."""
+
+    pattern = rf'(?ms)^\[\[package\]\]\nname = "{re.escape(package)}"\nversion = "([^"]+)"'
+    return read_declared_version(path, pattern)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected", help="expected release version or v-prefixed tag")
@@ -39,13 +46,18 @@ def main() -> int:
     if expected is not None and version != expected:
         print(f"VERSION {version} does not match expected release tag {expected_arg}", file=sys.stderr)
         return 1
+    package_lock = read_json(ROOT / "frontend/package-lock.json")
     checks = {
         "pyproject.toml": read_declared_version(ROOT / "pyproject.toml", r'^version\s*=\s*"([^"]+)"'),
         "frontend/package.json": read_json(ROOT / "frontend/package.json")["version"],
-        "frontend/package-lock.json": read_json(ROOT / "frontend/package-lock.json")["version"],
+        "frontend/package-lock.json": package_lock["version"],
+        'frontend/package-lock.json packages[""]': package_lock["packages"][""]["version"],
         "frontend/src-tauri/tauri.conf.json": read_json(ROOT / "frontend/src-tauri/tauri.conf.json")["version"],
         "frontend/src-tauri/Cargo.toml": read_declared_version(
             ROOT / "frontend/src-tauri/Cargo.toml", r'^version\s*=\s*"([^"]+)"'
+        ),
+        "frontend/src-tauri/Cargo.lock ds5forge": read_cargo_lock_package_version(
+            ROOT / "frontend/src-tauri/Cargo.lock", "ds5forge"
         ),
         "source/dualsense_companion/version.py": read_declared_version(
             ROOT / "source/dualsense_companion/version.py", r'^FALLBACK_VERSION\s*=\s*"([^"]+)"'

@@ -4,6 +4,22 @@ All notable changes to DS5Forge will be documented in this file.
 
 The project currently evolves from the upstream `Casliyan/DS5companion` baseline recorded in `UPSTREAM.md`.
 
+## 0.4.0-rc.1 — Release Candidate 1 — 2026-09-15
+
+### Release hardening
+
+- Promoted previously local Tauri release-contract checks into the committed test suite.
+- Fixed updater initialization so the base Tauri config is valid before CI injects the signing public key and endpoint.
+- Fixed SemVer prerelease ordering so `rc.1 < rc.2 < 0.4.0` and downgrades are rejected correctly.
+- Switched Windows updater artifacts to the native Tauri 2 NSIS `*-setup.exe` + detached `.sig` contract.
+- Added separate prerelease/stable updater channels and automated versioned GitHub Release publication from signed tags.
+- Extended version validation to cover the npm root lock entry and the DS5Forge package entry in `Cargo.lock`.
+
+### Validation status
+
+- Source/CI gates must be green before the `v0.4.0-rc.1` tag is created.
+- Real Windows install/reinstall/upgrade/uninstall, packaged sidecar lifecycle, Remote Access and physical DualSense USB validation remain release-candidate evidence, not inferred from CI.
+
 ## Unreleased — P3 Compatibility / Games / Automation — 2026-09-14
 
 ### Added

@@ -1,4 +1,4 @@
-name: DS5Forge Windows release artifacts
+name: DS5Forge Windows release
 
 on:
   push:
@@ -6,10 +6,10 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build-only:
+  build-and-publish:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,11 +33,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           TAURI_SIGNING_PUBLIC_KEY: ${{ secrets.TAURI_SIGNING_PUBLIC_KEY }}
-      - name: Generate checksums and updater metadata
+      - name: Generate updater metadata and checksums
         shell: pwsh
         run: |
           $bundleDir = "frontend/src-tauri/target/release/bundle/nsis"
-          python scripts/generate_checksums.py $bundleDir --output "$bundleDir/SHA256SUMS.txt"
           $bundle = Get-ChildItem $bundleDir -Filter "*-setup.exe" | Select-Object -First 1
           if (-not $bundle) { throw "No Tauri NSIS updater installer was produced" }
           $signaturePath = "$($bundle.FullName).sig"
@@ -45,6 +44,7 @@ jobs:
           $signature = Get-Content $signaturePath -Raw
           $url = "https://github.com/vinileonardo/DS5Forge/releases/download/${{ github.ref_name }}/$($bundle.Name)"
           python scripts/generate_release_metadata.py --signature $signature --url $url --output "$bundleDir/latest.json"
+          python scripts/generate_checksums.py $bundleDir --output "$bundleDir/SHA256SUMS.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: ds5forge-${{ github.ref_name }}-windows-artifacts
@@ -52,3 +52,12 @@ jobs:
             frontend/src-tauri/target/release/bundle/nsis/**
             source/dist/DS5ForgeCore.exe
           if-no-files-found: error
+      - name: Publish GitHub Release and updater channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/publish_github_release.py
+          --tag "${{ github.ref_name }}"
+          --repo "${{ github.repository }}"
+          --bundle-dir frontend/src-tauri/target/release/bundle/nsis
+          --core source/dist/DS5ForgeCore.exe

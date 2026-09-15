@@ -44,8 +44,10 @@ available source and automated gates are green.
    initialization, NSIS per-user bundle configuration and minimal capability
    scope.
 6. Release scripts build sidecar/desktop/NSIS, validate signatures and emit
-   checksums/static updater metadata. The Windows tag workflow builds artifacts
-   but does not publish them.
+   checksums/static updater metadata. The post-P4 release-candidate hardening
+   promotes signed tags into versioned GitHub Releases. Prereleases publish
+   updater metadata through the fixed `update-rc` channel; stable releases use
+   `releases/latest` and also refresh `update-rc` once to migrate RC installs.
 
 ## Recovery and teardown
 
