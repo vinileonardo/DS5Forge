@@ -10,6 +10,7 @@ from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 from dualsense_companion.core.diagnostics import DiagnosticStatus, GuidedDiagnostics
 from dualsense_companion.core.lifecycle import CoreSupervisor, LifecycleState, SupervisorConfig, sidecar_command
@@ -365,6 +366,20 @@ class TestTauriReleaseContract(unittest.TestCase):
             installer["updater_endpoint"]("0.4.0"),
             "https://github.com/vinileonardo/DS5Forge/releases/latest/download/latest.json",
         )
+
+    def test_release_build_resolves_windows_npm_cmd_for_python_subprocess(self) -> None:
+        installer = runpy.run_path(str(ROOT / "scripts/build_installer.py"))
+        resolver = installer["resolve_npm_executable"]
+        shutil_module = resolver.__globals__["shutil"]
+
+        def fake_which(candidate: str) -> str | None:
+            return r"C:\\Program Files\\nodejs\\npm.cmd" if candidate == "npm.cmd" else None
+
+        with patch.object(shutil_module, "which", side_effect=fake_which):
+            self.assertEqual(
+                resolver(platform_name="nt"),
+                r"C:\\Program Files\\nodejs\\npm.cmd",
+            )
 
     def test_release_workflow_publishes_versioned_release_and_refreshes_rc_channel(self) -> None:
         workflow = (ROOT / ".github/workflows/windows-release.yml").read_text(encoding="utf-8")
