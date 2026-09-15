@@ -18,6 +18,15 @@ class EventType(StrEnum):
     CONFIG = "config.changed"
     DIAGNOSTIC = "diagnostic"
     LAB = "controller.lab"
+    GAME_FOREGROUND_CHANGED = "game.foreground_changed"
+    GAME_DETECTED = "game.detected"
+    GAME_ACTIVATED = "game.activated"
+    GAME_DEACTIVATED = "game.deactivated"
+    GAME_RULE_APPLIED = "game.rule_applied"
+    COMPATIBILITY_CHANGED = "compatibility.changed"
+    GAME_CONFLICT_DETECTED = "game.conflict_detected"
+    AUTOMATION_CHANGED = "automation.changed"
+    SYNTHETIC_RELEASE = "synthetic.release"
 
 
 @dataclass(frozen=True, slots=True)

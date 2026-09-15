@@ -149,4 +149,118 @@ describe("realtime projection", () => {
     expect(next.runtime?.triggers?.preview?.status).toBe("timed_out");
     expect(next.runtime?.triggers?.left.mode).toBe("off");
   });
+
+  it("projects realtime game activation and foreground detection without a reload", () => {
+    const foreground = {
+      available: true,
+      pid: 42,
+      executable_name: "game.exe",
+      executable_path: "C:\\Games\\game.exe",
+      title: "Game",
+      observed_at: 10,
+      process_alive: true,
+      diagnostic: null,
+    };
+    const game = {
+      id: "game",
+      name: "Game",
+      executables: ["game.exe", "launcher.exe"],
+      executable_path: null,
+      profile: "Game",
+      compatibility_mode: "native" as const,
+      enabled: true,
+    };
+    const compatibility = {
+      mode: "native" as const,
+      available: true,
+      virtual_capability: {
+        installed: false,
+        available: false,
+        physical_suppression_supported: false,
+        provider: null,
+        reason: "No approved virtual-controller provider is installed.",
+      },
+      physical_input_visible: true,
+      virtual_input_active: false,
+      physical_suppression_active: false,
+      double_input_risk: false,
+      reason: null,
+      changed_at: 10,
+    };
+    const observed = applyRuntimeEvent(
+      {
+        runtime: {
+          ...runtime,
+          automation: {
+            enabled: true,
+            exit_policy: "restore_previous",
+            default_profile: "Default",
+            active_game_id: null,
+            active_game_name: null,
+            active_profile: "Default",
+            profile_origin: "manual",
+            manual_override: false,
+            last_match: null,
+            rule_evaluations: [],
+            previous_profile: null,
+            previous_compatibility_mode: null,
+            transition: 0,
+            last_transition_at: 0,
+            status: "enabled",
+            diagnostic: null,
+          },
+          compatibility,
+        },
+        config: null,
+      },
+      {
+        type: "game.foreground_changed",
+        version: 1,
+        payload: {
+          foreground,
+          changed: true,
+          previous: {
+            available: true,
+            pid: null,
+            executable_name: null,
+            executable_path: null,
+            title: null,
+            observed_at: 9,
+            process_alive: false,
+            diagnostic: null,
+          },
+        },
+      },
+    );
+    const next = applyRuntimeEvent(observed, {
+      type: "game.activated",
+      version: 1,
+      payload: { game, profile: "Game", profile_origin: "automatic", compatibility },
+    });
+    expect(observed.runtime?.foreground?.executable_name).toBe("game.exe");
+    expect(next.runtime?.automation?.active_game_id).toBe("game");
+    expect(next.runtime?.active_profile).toBe("Game");
+    expect(next.runtime?.automation?.active_game?.name).toBe("Game");
+  });
+
+  it("projects process-name conflict evidence from realtime events", () => {
+    const next = applyRuntimeEvent(
+      { runtime, config: null },
+      {
+        type: "game.conflict_detected",
+        version: 1,
+        payload: {
+          conflict: {
+            process: "steam.exe",
+            running: true,
+            severity: "warning",
+            message: "Steam is running. Steam Input may affect this game depending on its configuration.",
+            evidence: "Process name was observed; Steam Input activity was not proven.",
+            checked_at: 10,
+          },
+        },
+      },
+    );
+    expect(next.runtime?.conflicts?.[0].process).toBe("steam.exe");
+  });
 });

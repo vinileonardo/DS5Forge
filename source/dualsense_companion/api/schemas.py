@@ -277,6 +277,186 @@ class ErrorResponse(StrictModel):
     fields: dict[str, Any]
 
 
+class ForegroundApplicationResponse(StrictModel):
+    available: bool
+    pid: int | None
+    executable_name: str | None
+    executable_path: str | None
+    title: str | None
+    observed_at: float
+    process_alive: bool
+    diagnostic: str | None
+
+
+class GameDefinitionRequest(StrictModel):
+    id: StrictStr
+    name: StrictStr
+    executables: list[StrictStr] = Field(min_length=1, max_length=16)
+    executable_path: StrictStr | None = None
+    profile: StrictStr = "Default"
+    compatibility_mode: Literal["native", "remap", "virtual"] = "native"
+    enabled: StrictBool = True
+
+
+class GameDefinitionResponse(GameDefinitionRequest):
+    pass
+
+
+class GamesResponse(StrictModel):
+    games: list[GameDefinitionResponse]
+
+
+class RuleEvaluationResponse(StrictModel):
+    game_id: str
+    game_name: str
+    matched: bool
+    reason: str
+    action: str
+    profile: str | None
+    compatibility_mode: Literal["native", "remap", "virtual"] | None
+
+
+class GameMatchResponse(StrictModel):
+    matched: bool
+    game_id: str | None
+    game_name: str | None
+    reason: str
+    foreground: ForegroundApplicationResponse
+    evaluations: list[RuleEvaluationResponse]
+
+
+class GameMatchStateResponse(StrictModel):
+    matched: bool
+    game_id: str | None
+    game_name: str | None
+    reason: str
+    foreground: ForegroundApplicationResponse
+
+
+class ActiveGameResponse(StrictModel):
+    game: GameDefinitionResponse | None
+    automation: dict[str, Any]
+
+
+class AutomationUpdateRequest(PatchModel):
+    enabled: StrictBool | None = None
+    exit_policy: Literal["restore_previous", "apply_default", "keep_current"] | None = None
+    default_profile: StrictStr | None = None
+
+
+class AutomationResponse(StrictModel):
+    enabled: bool
+    exit_policy: Literal["restore_previous", "apply_default", "keep_current"]
+    default_profile: str
+    active_game_id: str | None
+    active_game_name: str | None
+    active_profile: str
+    profile_origin: Literal["manual", "automatic"]
+    manual_override: bool
+    last_match: GameMatchStateResponse | None
+    rule_evaluations: list[RuleEvaluationResponse]
+    previous_profile: str | None
+    previous_compatibility_mode: Literal["native", "remap", "virtual"] | None
+    transition: int
+    last_transition_at: float
+    status: str
+    diagnostic: str | None
+    foreground: ForegroundApplicationResponse | None = None
+    active_game: GameDefinitionResponse | None = None
+
+
+class VirtualControllerCapabilityResponse(StrictModel):
+    installed: bool
+    available: bool
+    physical_suppression_supported: bool
+    provider: str | None
+    reason: str | None
+
+
+class CompatibilityStateResponse(StrictModel):
+    mode: Literal["native", "remap", "virtual"]
+    available: bool
+    virtual_capability: VirtualControllerCapabilityResponse
+    physical_input_visible: bool
+    virtual_input_active: bool
+    physical_suppression_active: bool
+    double_input_risk: bool
+    reason: str | None
+    changed_at: float
+
+
+class CompatibilityUpdateRequest(StrictModel):
+    mode: Literal["native", "remap", "virtual"]
+
+
+class MappingResponse(StrictModel):
+    id: StrictStr
+    input: StrictStr
+    output_kind: Literal["keyboard", "mouse"]
+    output_code: StrictStr
+    game_id: StrictStr | None = None
+    enabled: StrictBool = True
+    debounce_ms: StrictInt = Field(default=25, ge=1, le=500)
+
+
+class MappingsResponse(StrictModel):
+    mappings: list[MappingResponse]
+
+
+class MappingsUpdateRequest(StrictModel):
+    mappings: list[MappingResponse]
+
+
+class ChordResponse(StrictModel):
+    id: StrictStr
+    inputs: list[StrictStr]
+    output_kind: Literal["keyboard", "mouse"]
+    output_code: StrictStr
+    game_id: StrictStr | None = None
+    enabled: StrictBool = True
+    window_ms: StrictInt = Field(default=250, ge=25, le=1_000)
+    debounce_ms: StrictInt = Field(default=25, ge=1, le=500)
+
+
+class ChordsResponse(StrictModel):
+    chords: list[ChordResponse]
+
+
+class ChordsUpdateRequest(StrictModel):
+    chords: list[ChordResponse]
+
+
+class SyntheticOutputResponse(StrictModel):
+    kind: Literal["keyboard", "mouse", "logical"]
+    code: str
+
+
+class ReleaseReportResponse(StrictModel):
+    reason: str
+    released: list[SyntheticOutputResponse]
+    failures: list[str]
+    completed: bool
+
+
+class SyntheticOutputStateResponse(StrictModel):
+    held: list[SyntheticOutputResponse]
+    last_release: ReleaseReportResponse | None
+    release_status: str
+
+
+class ConflictDiagnosticResponse(StrictModel):
+    process: str
+    running: bool
+    severity: str
+    message: str
+    evidence: str | None
+    checked_at: float
+
+
+class ConflictDiagnosticsResponse(StrictModel):
+    conflicts: list[ConflictDiagnosticResponse]
+
+
 class HealthStateResponse(StrictModel):
     process_alive: bool
     controller_available: bool
@@ -310,6 +490,11 @@ class RuntimeStateResponse(StrictModel):
     health: HealthStateResponse
     sequence: int
     updated_at: float
+    foreground: ForegroundApplicationResponse | None = None
+    automation: AutomationResponse | None = None
+    compatibility: CompatibilityStateResponse | None = None
+    synthetic_outputs: SyntheticOutputStateResponse | None = None
+    conflicts: list[ConflictDiagnosticResponse] = Field(default_factory=list)
 
 
 class ProfileSummary(StrictModel):

@@ -26,6 +26,11 @@ def config_file():
     return os.path.join(config_dir(), "config.json")
 
 
+def games_file():
+    """Return the separate P3 registry path; P2 config.json stays untouched."""
+    return os.path.join(config_dir(), "games.json")
+
+
 def ensure_seeded():
     """Copy bundled defaults into the user config dir on first run."""
     os.makedirs(config_dir(), exist_ok=True)

@@ -77,6 +77,108 @@ export function applyRuntimeEvent(projection: RuntimeProjection, event: RuntimeE
         return { ...projection, runtime: { ...projection.runtime, stick_calibration: event.payload.state } };
       }
       return projection;
+    case "game.foreground_changed":
+      return {
+        ...projection,
+        runtime: projection.runtime
+          ? { ...projection.runtime, foreground: event.payload.foreground }
+          : projection.runtime,
+      };
+    case "game.detected":
+      return {
+        ...projection,
+        runtime: projection.runtime
+          ? {
+              ...projection.runtime,
+              foreground: event.payload.foreground,
+              automation: projection.runtime.automation
+                ? {
+                    ...projection.runtime.automation,
+                    last_match: event.payload.match,
+                    rule_evaluations: event.payload.evaluations,
+                  }
+                : projection.runtime.automation,
+            }
+          : projection.runtime,
+      };
+    case "compatibility.changed":
+      return {
+        ...projection,
+        runtime: projection.runtime
+          ? { ...projection.runtime, compatibility: event.payload.compatibility }
+          : projection.runtime,
+      };
+    case "game.activated":
+      return {
+        ...projection,
+        runtime: projection.runtime
+          ? {
+              ...projection.runtime,
+              active_profile: event.payload.profile,
+              compatibility: event.payload.compatibility,
+              automation: projection.runtime.automation
+                ? {
+                    ...projection.runtime.automation,
+                    active_game_id: event.payload.game.id,
+                    active_game_name: event.payload.game.name,
+                    active_profile: event.payload.profile,
+                    profile_origin: event.payload.profile_origin,
+                    manual_override: false,
+                    status: "active",
+                    active_game: event.payload.game,
+                  }
+                : projection.runtime.automation,
+            }
+          : projection.runtime,
+      };
+    case "game.deactivated":
+      return {
+        ...projection,
+        runtime: projection.runtime
+          ? {
+              ...projection.runtime,
+              active_profile: event.payload.applied_profile ?? projection.runtime.active_profile,
+              automation: projection.runtime.automation
+                ? {
+                    ...projection.runtime.automation,
+                    active_game_id: null,
+                    active_game_name: null,
+                    active_profile: event.payload.applied_profile ?? projection.runtime.active_profile,
+                    active_game: null,
+                    manual_override: false,
+                  }
+                : projection.runtime.automation,
+            }
+          : projection.runtime,
+      };
+    case "game.rule_applied":
+      return projection;
+    case "automation.changed":
+      if (!("automation" in event.payload) || !projection.runtime) return projection;
+      return {
+        ...projection,
+        runtime: {
+          ...projection.runtime,
+          automation: event.payload.automation,
+        },
+      };
+    case "game.conflict_detected":
+      return {
+        ...projection,
+        runtime: projection.runtime
+          ? {
+              ...projection.runtime,
+              conflicts: [
+                ...(projection.runtime.conflicts ?? []).filter(
+                  (item) => item.process !== event.payload.conflict.process,
+                ),
+                event.payload.conflict,
+              ],
+            }
+          : projection.runtime,
+      };
+    case "synthetic.release":
+      return projection;
     case "profile.changed":
     case "diagnostic":
       return projection;
@@ -129,6 +231,24 @@ function eventSummary(event: RuntimeEvent): string {
       return `Controller Lab event${typeof event.payload.kind === "string" ? `: ${event.payload.kind}` : ""}`;
     case "diagnostic":
       return "Core diagnostic event";
+    case "game.foreground_changed":
+      return `Foreground changed: ${event.payload.foreground.executable_name ?? "desktop"}`;
+    case "game.detected":
+      return event.payload.match ? "Game rule matched foreground" : "No game rule matched foreground";
+    case "game.activated":
+      return "Game profile activated";
+    case "game.deactivated":
+      return "Game profile deactivated";
+    case "game.rule_applied":
+      return "Game rule evaluation completed";
+    case "compatibility.changed":
+      return `Compatibility mode: ${event.payload.compatibility.mode}`;
+    case "game.conflict_detected":
+      return `Possible conflict: ${event.payload.conflict.process}`;
+    case "automation.changed":
+      return "Game automation changed";
+    case "synthetic.release":
+      return "Synthetic outputs released";
   }
 }
 

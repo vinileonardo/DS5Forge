@@ -11,13 +11,26 @@ from ..domain.models import AdaptiveTriggerEffect, LightbarState, StickCalibrati
 from .origins import DEFAULT_ALLOWED_ORIGINS, validate_allowed_origins
 from .schemas import (
     API_PREFIX,
+    ActiveGameResponse,
+    AutomationResponse,
+    AutomationUpdateRequest,
+    ChordsResponse,
+    ChordsUpdateRequest,
+    CompatibilityStateResponse,
+    CompatibilityUpdateRequest,
     ConfigPatchRequest,
     ConfigReplaceRequest,
     ConfigResponse,
+    ConflictDiagnosticsResponse,
     ControllerTelemetryResponse,
     DeleteProfileResponse,
+    ForegroundApplicationResponse,
     FullControllerProfile,
     FullProfileSaveRequest,
+    GameDefinitionRequest,
+    GameDefinitionResponse,
+    GameMatchResponse,
+    GamesResponse,
     GestureConfigRequest,
     GestureConfigResponse,
     HapticsTestRequest,
@@ -25,6 +38,8 @@ from .schemas import (
     HealthResponse,
     LightbarApplyRequest,
     LightbarResponse,
+    MappingsResponse,
+    MappingsUpdateRequest,
     ProfileImportRequest,
     ProfileLoadResponse,
     ProfileSaveResponse,
@@ -95,7 +110,7 @@ def create_app(facade: CoreFacade, *, allowed_origins: tuple[str, ...] = DEFAULT
 
     @app.exception_handler(DS5ForgeError)
     async def handle_domain_error(_request: Any, exc: DS5ForgeError) -> Any:
-        status = 404 if exc.code.value == "profile.not_found" else 422
+        status = 404 if exc.code in {ErrorCode.PROFILE_NOT_FOUND, ErrorCode.GAME_NOT_FOUND} else 422
         return _json_response(status, exc.to_snapshot().to_dict())
 
     @app.exception_handler(RequestValidationError)
@@ -128,6 +143,75 @@ def create_app(facade: CoreFacade, *, allowed_origins: tuple[str, ...] = DEFAULT
     @app.get(f"{API_PREFIX}/state", response_model=RuntimeStateResponse)
     async def state() -> dict[str, Any]:
         return facade.state_dict()
+
+    @app.get(f"{API_PREFIX}/games", response_model=GamesResponse)
+    async def games() -> dict[str, Any]:
+        return {"games": facade.games()}
+
+    @app.post(f"{API_PREFIX}/games", response_model=GameDefinitionResponse)
+    async def add_game(payload: GameDefinitionRequest) -> dict[str, Any]:
+        return facade.add_game(payload.model_dump())
+
+    @app.get(f"{API_PREFIX}/games/active", response_model=ActiveGameResponse)
+    async def active_game() -> dict[str, Any]:
+        return facade.active_game()
+
+    @app.get(f"{API_PREFIX}/games/{{game_id}}", response_model=GameDefinitionResponse)
+    async def get_game(game_id: str) -> dict[str, Any]:
+        return facade.get_game(game_id)
+
+    @app.put(f"{API_PREFIX}/games/{{game_id}}", response_model=GameDefinitionResponse)
+    async def update_game(game_id: str, payload: GameDefinitionRequest) -> dict[str, Any]:
+        return facade.update_game(game_id, payload.model_dump())
+
+    @app.delete(f"{API_PREFIX}/games/{{game_id}}")
+    async def delete_game(game_id: str) -> dict[str, Any]:
+        facade.delete_game(game_id)
+        return {"deleted": game_id}
+
+    @app.post(f"{API_PREFIX}/games/{{game_id}}/test-match", response_model=GameMatchResponse)
+    async def test_game_match(game_id: str) -> dict[str, Any]:
+        return facade.test_game_match(game_id)
+
+    @app.get(f"{API_PREFIX}/foreground", response_model=ForegroundApplicationResponse)
+    async def foreground() -> dict[str, Any]:
+        return facade.foreground_state()
+
+    @app.get(f"{API_PREFIX}/automation", response_model=AutomationResponse)
+    async def automation() -> dict[str, Any]:
+        return facade.automation()
+
+    @app.put(f"{API_PREFIX}/automation", response_model=AutomationResponse)
+    async def update_automation(payload: AutomationUpdateRequest) -> dict[str, Any]:
+        return facade.update_automation(payload.model_dump(exclude_unset=True, exclude_none=True))
+
+    @app.get(f"{API_PREFIX}/compatibility", response_model=CompatibilityStateResponse)
+    async def compatibility() -> dict[str, Any]:
+        return facade.compatibility()
+
+    @app.put(f"{API_PREFIX}/compatibility", response_model=CompatibilityStateResponse)
+    async def update_compatibility(payload: CompatibilityUpdateRequest) -> dict[str, Any]:
+        return facade.update_compatibility(payload.mode)
+
+    @app.get(f"{API_PREFIX}/mappings", response_model=MappingsResponse)
+    async def mappings() -> dict[str, Any]:
+        return {"mappings": facade.mappings()}
+
+    @app.put(f"{API_PREFIX}/mappings", response_model=MappingsResponse)
+    async def update_mappings(payload: MappingsUpdateRequest) -> dict[str, Any]:
+        return {"mappings": facade.update_mappings([item.model_dump() for item in payload.mappings])}
+
+    @app.get(f"{API_PREFIX}/chords", response_model=ChordsResponse)
+    async def chords() -> dict[str, Any]:
+        return {"chords": facade.chords()}
+
+    @app.put(f"{API_PREFIX}/chords", response_model=ChordsResponse)
+    async def update_chords(payload: ChordsUpdateRequest) -> dict[str, Any]:
+        return {"chords": facade.update_chords([item.model_dump() for item in payload.chords])}
+
+    @app.get(f"{API_PREFIX}/diagnostics/conflicts", response_model=ConflictDiagnosticsResponse)
+    async def conflict_diagnostics() -> dict[str, Any]:
+        return {"conflicts": facade.conflict_diagnostics()}
 
     @app.get(f"{API_PREFIX}/config", response_model=ConfigResponse)
     async def config() -> dict[str, Any]:

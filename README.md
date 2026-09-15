@@ -42,6 +42,17 @@ triggers and optional lightbar controls are capability-gated from the
 installed Windows adapter surface, and every preview/test output has a
 server-owned stop or timeout path.
 
+P3 adds the Games surface at `/games`. It matches foreground applications by
+one or more configured executable identities, applies profiles through the core,
+and exposes explicit Native and Remap behavior plus a diagnosed-but-unavailable
+Virtual/XInput model. Game registry, automation policy, mappings and chords are
+stored in a separate validated schema-v2 `games.json`. Keyboard mappings support
+single keys or bounded combinations such as `CTRL+SHIFT+S`. Foreground polling,
+keyboard/mouse output and process
+inspection remain behind platform adapters; the UI receives only snapshots and
+versioned events. P3 adds no Bluetooth/wireless path, driver, installer,
+external-process control or Tauri permission.
+
 ## DS5Companion original vs. DS5Forge P0
 
 DS5Forge P0 starts from the upstream snapshot recorded in `UPSTREAM.md`
@@ -84,7 +95,7 @@ validated configuration and better recovery/diagnostics when audio or hardware
 fails. Physical Windows + DualSense USB validation is still required before we
 claim regression-free hardware behavior.
 
-## P2 developer setup
+## P3 developer setup
 
 Python 3.12.x is the required P0 development/build runtime:
 
@@ -116,6 +127,15 @@ Open `http://127.0.0.1:5173`. The frontend talks only to the local versioned
 HTTP/WebSocket contracts; it never receives a controller object or Windows API
 handle. P2's Controller Lab uses the same local authority and does not bundle
 the Python core or add an installer, tray, updater or autostart path.
+
+P3's Games page uses the same local authority. Enable automation only after
+adding executable-identity rules and reviewing the exit policy. `restore_previous` is
+the default; a manual profile or mode change is shown as a manual override.
+Virtual/XInput remains unavailable unless a future approved provider is
+injected and reports reliable physical suppression. See
+[`docs/P3_EXECUTION_PACK.md`](docs/P3_EXECUTION_PACK.md),
+[`docs/P3_UX_SPEC.md`](docs/P3_UX_SPEC.md) and
+[`docs/P3_VALIDATION.md`](docs/P3_VALIDATION.md).
 
 ### Optional native Tauri development on Windows
 

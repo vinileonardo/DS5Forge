@@ -6,6 +6,7 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager
 from typing import Protocol
 
+from ..domain.games import ForegroundApplication, VirtualControllerCapability
 from ..domain.models import (
     ControllerCapabilities,
     ControllerIdentity,
@@ -58,6 +59,34 @@ class MouseOutput(Protocol):
     def wheel(self, amount: int, horizontal: bool = False) -> None: ...
 
     def release_all(self) -> None: ...
+
+
+class KeyboardOutput(Protocol):
+    """Small platform boundary for keyboard SendInput ownership."""
+
+    def key(self, code: str, down: bool) -> None: ...
+
+    def release_all(self) -> None: ...
+
+
+class ForegroundDetector(Protocol):
+    def current(self) -> ForegroundApplication: ...
+
+
+class ProcessInspector(Protocol):
+    def running_processes(self) -> set[str] | None: ...
+
+
+class VirtualControllerProvider(Protocol):
+    def capability(self) -> VirtualControllerCapability: ...
+
+    def start(self) -> None: ...
+
+    def send_button(self, code: str, down: bool) -> None: ...
+
+    def release_all(self) -> None: ...
+
+    def close(self) -> None: ...
 
 
 class AudioCapture(Protocol):

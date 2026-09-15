@@ -230,6 +230,204 @@ export const HapticsTestRunSchema = z
   })
   .strict();
 
+export const ForegroundApplicationSchema = z
+  .object({
+    available: z.boolean(),
+    pid: z.number().int().nullable(),
+    executable_name: z.string().nullable(),
+    executable_path: z.string().nullable(),
+    title: z.string().nullable(),
+    observed_at: finiteNumber,
+    process_alive: z.boolean(),
+    diagnostic: z.string().nullable(),
+  })
+  .strict();
+
+export const GameDefinitionSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    executables: z.array(z.string().min(1)).min(1).max(16),
+    executable_path: z.string().nullable(),
+    profile: z.string().min(1),
+    compatibility_mode: z.enum(["native", "remap", "virtual"]),
+    enabled: z.boolean(),
+  })
+  .strict();
+
+export const GamesResponseSchema = z.object({ games: z.array(GameDefinitionSchema) }).strict();
+
+export const RuleEvaluationSchema = z
+  .object({
+    game_id: z.string(),
+    game_name: z.string(),
+    matched: z.boolean(),
+    reason: z.string(),
+    action: z.string(),
+    profile: z.string().nullable(),
+    compatibility_mode: z.enum(["native", "remap", "virtual"]).nullable(),
+  })
+  .strict();
+
+export const GameMatchSchema = z
+  .object({
+    game_id: z.string().nullable(),
+    game_name: z.string().nullable(),
+    matched: z.boolean(),
+    reason: z.string(),
+    foreground: ForegroundApplicationSchema,
+  })
+  .strict();
+
+export const GameMatchResponseSchema = GameMatchSchema.extend({
+  evaluations: z.array(RuleEvaluationSchema),
+}).strict();
+
+export const AutomationStateSchema = z
+  .object({
+    enabled: z.boolean(),
+    exit_policy: z.enum(["restore_previous", "apply_default", "keep_current"]),
+    default_profile: z.string(),
+    active_game_id: z.string().nullable(),
+    active_game_name: z.string().nullable(),
+    active_profile: z.string(),
+    profile_origin: z.enum(["manual", "automatic"]),
+    manual_override: z.boolean(),
+    last_match: GameMatchSchema.nullable(),
+    rule_evaluations: z.array(RuleEvaluationSchema),
+    previous_profile: z.string().nullable(),
+    previous_compatibility_mode: z.enum(["native", "remap", "virtual"]).nullable(),
+    transition: z.number().int().nonnegative(),
+    last_transition_at: finiteNumber,
+    status: z.string(),
+    diagnostic: z.string().nullable(),
+    foreground: ForegroundApplicationSchema.optional(),
+    active_game: GameDefinitionSchema.nullable().optional(),
+  })
+  .strict();
+
+export const VirtualControllerCapabilitySchema = z
+  .object({
+    installed: z.boolean(),
+    available: z.boolean(),
+    physical_suppression_supported: z.boolean(),
+    provider: z.string().nullable(),
+    reason: z.string().nullable(),
+  })
+  .strict();
+
+export const CompatibilityStateSchema = z
+  .object({
+    mode: z.enum(["native", "remap", "virtual"]),
+    available: z.boolean(),
+    virtual_capability: VirtualControllerCapabilitySchema,
+    physical_input_visible: z.boolean(),
+    virtual_input_active: z.boolean(),
+    physical_suppression_active: z.boolean(),
+    double_input_risk: z.boolean(),
+    reason: z.string().nullable(),
+    changed_at: finiteNumber,
+  })
+  .strict();
+
+export const GameActivatedEventSchema = z
+  .object({
+    game: GameDefinitionSchema,
+    profile: z.string(),
+    profile_origin: z.enum(["manual", "automatic"]),
+    compatibility: CompatibilityStateSchema,
+  })
+  .strict();
+
+export const GameDeactivatedEventSchema = z
+  .object({
+    game_id: z.string(),
+    reason: z.string(),
+    exit_policy: z.string(),
+    applied_profile: z.string().nullable(),
+    action: z.string(),
+  })
+  .strict();
+
+export const GameRuleAppliedEventSchema = z
+  .object({
+    game_id: z.string(),
+    matched: z.boolean(),
+    applied: z.boolean(),
+    profile: z.string().optional(),
+    error: ErrorSnapshotSchema.optional(),
+  })
+  .strict();
+
+export const MappingSchema = z
+  .object({
+    id: z.string().min(1),
+    input: z.string().min(1),
+    output_kind: z.enum(["keyboard", "mouse"]),
+    output_code: z.string().min(1),
+    game_id: z.string().nullable(),
+    enabled: z.boolean(),
+    debounce_ms: z.number().int().min(1).max(500),
+  })
+  .strict();
+
+export const MappingsResponseSchema = z.object({ mappings: z.array(MappingSchema) }).strict();
+
+export const ChordSchema = z
+  .object({
+    id: z.string().min(1),
+    inputs: z.array(z.string().min(1)).min(2),
+    output_kind: z.enum(["keyboard", "mouse"]),
+    output_code: z.string().min(1),
+    game_id: z.string().nullable(),
+    enabled: z.boolean(),
+    window_ms: z.number().int().min(25).max(1000),
+    debounce_ms: z.number().int().min(1).max(500),
+  })
+  .strict();
+
+export const ChordsResponseSchema = z.object({ chords: z.array(ChordSchema) }).strict();
+
+export const SyntheticOutputSchema = z
+  .object({ kind: z.enum(["keyboard", "mouse", "logical"]), code: z.string() })
+  .strict();
+export const ReleaseReportSchema = z
+  .object({
+    reason: z.string(),
+    released: z.array(SyntheticOutputSchema),
+    failures: z.array(z.string()),
+    completed: z.boolean(),
+  })
+  .strict();
+export const SyntheticOutputStateSchema = z
+  .object({
+    held: z.array(SyntheticOutputSchema),
+    last_release: ReleaseReportSchema.nullable(),
+    release_status: z.string(),
+  })
+  .strict();
+
+export const ConflictDiagnosticSchema = z
+  .object({
+    process: z.string(),
+    running: z.boolean(),
+    severity: z.string(),
+    message: z.string(),
+    evidence: z.string().nullable(),
+    checked_at: finiteNumber,
+  })
+  .strict();
+export const ConflictDiagnosticsResponseSchema = z
+  .object({ conflicts: z.array(ConflictDiagnosticSchema) })
+  .strict();
+
+export const AutomationChangedEventSchema = z.union([
+  z.object({ automation: AutomationStateSchema, reason: z.string().optional() }).strict(),
+  z.object({ kind: z.literal("games.changed"), games: z.array(GameDefinitionSchema) }).strict(),
+  z.object({ kind: z.literal("mappings.changed"), mappings: z.array(MappingSchema) }).strict(),
+  z.object({ kind: z.literal("chords.changed"), chords: z.array(ChordSchema) }).strict(),
+]);
+
 const LabLightbarEventSchema = z
   .object({
     kind: z.enum(["lightbar.applied", "lightbar.reset"]),
@@ -318,6 +516,20 @@ export const RuntimeStateSchema = z
     health: HealthStateSchema,
     sequence: z.number().int().nonnegative(),
     updated_at: finiteNumber,
+    foreground: ForegroundApplicationSchema.optional().default({
+      available: false,
+      pid: null,
+      executable_name: null,
+      executable_path: null,
+      title: null,
+      observed_at: 0,
+      process_alive: false,
+      diagnostic: null,
+    }),
+    automation: AutomationStateSchema.optional(),
+    compatibility: CompatibilityStateSchema.optional(),
+    synthetic_outputs: SyntheticOutputStateSchema.optional(),
+    conflicts: z.array(ConflictDiagnosticSchema).optional().default([]),
   })
   .strict();
 
@@ -432,6 +644,20 @@ export type RumbleConfig = z.infer<typeof RumbleConfigSchema>;
 export type TrackpadConfig = z.infer<typeof TrackpadConfigSchema>;
 export type Config = z.infer<typeof ConfigSchema>;
 export type ProfileSummary = z.infer<typeof ProfileSummarySchema>;
+export type ForegroundApplication = z.infer<typeof ForegroundApplicationSchema>;
+export type GameDefinition = z.infer<typeof GameDefinitionSchema>;
+export type GameMatch = z.infer<typeof GameMatchSchema>;
+export type GameMatchResponse = z.infer<typeof GameMatchResponseSchema>;
+export type GameActivatedEvent = z.infer<typeof GameActivatedEventSchema>;
+export type GameDeactivatedEvent = z.infer<typeof GameDeactivatedEventSchema>;
+export type GameRuleAppliedEvent = z.infer<typeof GameRuleAppliedEventSchema>;
+export type RuleEvaluation = z.infer<typeof RuleEvaluationSchema>;
+export type AutomationState = z.infer<typeof AutomationStateSchema>;
+export type CompatibilityState = z.infer<typeof CompatibilityStateSchema>;
+export type Mapping = z.infer<typeof MappingSchema>;
+export type Chord = z.infer<typeof ChordSchema>;
+export type ConflictDiagnostic = z.infer<typeof ConflictDiagnosticSchema>;
+export type AutomationChangedEvent = z.infer<typeof AutomationChangedEventSchema>;
 
 export type RumbleConfigPatch = Partial<RumbleConfig>;
 export type TrackpadConfigPatch = Partial<TrackpadConfig>;
@@ -452,7 +678,16 @@ export type EventType =
   | "config.changed"
   | "profile.changed"
   | "controller.lab"
-  | "diagnostic";
+  | "diagnostic"
+  | "game.foreground_changed"
+  | "game.detected"
+  | "game.activated"
+  | "game.deactivated"
+  | "game.rule_applied"
+  | "compatibility.changed"
+  | "game.conflict_detected"
+  | "automation.changed"
+  | "synthetic.release";
 
 export type RuntimeEvent =
   | { type: "state.snapshot"; version: 1; payload: { state: RuntimeState } }
@@ -471,7 +706,24 @@ export type RuntimeEvent =
   | { type: "config.changed"; version: 1; payload: { config: Config } }
   | { type: "profile.changed"; version: 1; payload: Record<string, unknown> }
   | { type: "controller.lab"; version: 1; payload: z.infer<typeof ControllerLabEventSchema> }
-  | { type: "diagnostic"; version: 1; payload: Record<string, unknown> };
+  | { type: "diagnostic"; version: 1; payload: Record<string, unknown> }
+  | {
+      type: "game.foreground_changed";
+      version: 1;
+      payload: { foreground: ForegroundApplication; changed: boolean; previous: ForegroundApplication };
+    }
+  | {
+      type: "game.detected";
+      version: 1;
+      payload: { match: GameMatch | null; evaluations: RuleEvaluation[]; foreground: ForegroundApplication };
+    }
+  | { type: "game.activated"; version: 1; payload: GameActivatedEvent }
+  | { type: "game.deactivated"; version: 1; payload: GameDeactivatedEvent }
+  | { type: "game.rule_applied"; version: 1; payload: GameRuleAppliedEvent }
+  | { type: "compatibility.changed"; version: 1; payload: { compatibility: CompatibilityState } }
+  | { type: "game.conflict_detected"; version: 1; payload: { conflict: ConflictDiagnostic } }
+  | { type: "automation.changed"; version: 1; payload: AutomationChangedEvent }
+  | { type: "synthetic.release"; version: 1; payload: { report: Record<string, unknown> } };
 
 export const RUMBLE_FIELD_SPECS: ReadonlyArray<{
   key: keyof RumbleConfig;

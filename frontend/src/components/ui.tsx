@@ -1,8 +1,9 @@
-import { useEffect, useId, useRef } from "react";
+import { cloneElement, isValidElement, useEffect, useId, useRef } from "react";
 import type {
   ButtonHTMLAttributes,
   InputHTMLAttributes,
   KeyboardEvent,
+  ReactElement,
   ReactNode,
   SelectHTMLAttributes,
 } from "react";
@@ -94,16 +95,52 @@ export function Field({
   error?: string;
   children: ReactNode;
 }) {
+  const generatedId = useId();
+  const helpId = `${generatedId}-help`;
+  const errorId = `${generatedId}-error`;
+  let controlId: string | undefined;
+  let control = children;
+
+  if (isValidElement(children) && isFieldControl(children)) {
+    const props = children.props as {
+      id?: string;
+      "aria-describedby"?: string;
+      "aria-invalid"?: boolean;
+    };
+    controlId = props.id ?? generatedId;
+    const describedBy = [props["aria-describedby"], help ? helpId : undefined, error ? errorId : undefined]
+      .filter(Boolean)
+      .join(" ");
+    control = cloneElement(children, {
+      id: controlId,
+      ...(describedBy ? { "aria-describedby": describedBy } : {}),
+      ...(error ? { "aria-invalid": true } : {}),
+    });
+  }
+
   return (
     <div className="field">
       <div className="field-heading">
-        <label>{label}</label>
-        {error && <span className="field-error">{error}</span>}
+        <label htmlFor={controlId}>{label}</label>
+        {error && (
+          <span className="field-error" id={errorId}>
+            {error}
+          </span>
+        )}
       </div>
-      {children}
-      {help && <p className="field-help">{help}</p>}
+      {control}
+      {help && (
+        <p className="field-help" id={helpId}>
+          {help}
+        </p>
+      )}
     </div>
   );
+}
+
+function isFieldControl(element: ReactElement): boolean {
+  if (element.type === NumberInput || element.type === Select) return true;
+  return typeof element.type === "string" && ["input", "select", "textarea"].includes(element.type);
 }
 
 export function NumberInput(props: InputHTMLAttributes<HTMLInputElement>) {

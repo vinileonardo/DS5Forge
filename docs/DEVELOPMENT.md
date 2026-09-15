@@ -1,4 +1,4 @@
-# P0/P1/P2 development and verification
+# P0/P1/P2/P3 development and verification
 
 Python 3.12.x is the required P0 development/build runtime. From the repository root:
 
@@ -21,8 +21,9 @@ python source/run.py
 ```
 
 The GUI/API share one `CoreFacade` in the desktop process. Use injected fake
-controller, capture and pointer adapters for tests; do not boot Bluetooth,
-wireless transports or virtual-controller software.
+controller, capture, foreground, process, keyboard and virtual-provider
+adapters for tests; do not boot Bluetooth, wireless transports or production
+virtual-controller software.
 
 ## P1/P2 frontend
 
@@ -111,6 +112,26 @@ rejection, capability-disabled no-call behavior, trigger timeout/cancel and
 reconnect neutralization, bounded haptics tests, full-profile validation before
 apply, atomic writes and state-preserving rejected imports.
 
+## P3 Games / automation checks
+
+The Games page is at `/games`. Add rules with one or more executable names,
+review each explanation, then enable automation. The core must demonstrate A → B, game →
+desktop and process-exit transitions, previous-profile capture, all exit
+policies, manual override and no reapply inside an unchanged context. Mappings
+and chords are validated before activation; keyboard targets may be bounded
+`+` combinations with shared-key ownership, chord candidates delay simple
+outputs during a bounded window and all synthetic outputs release on every
+transition/exception/disconnect/shutdown.
+
+Virtual/XInput is an explicit unavailable state in this sprint. A request for
+it must return a structured error and leave the previous mode unchanged.
+Conflict diagnostics may report Steam/remappers by process name, but must not
+claim active interception or control another process. `games.json` is separate
+from P2 config, schema-v2, atomically written and migrates the unreleased P3
+schema-v1 single-executable shape.
+
+Run the complete P3 evidence record in [`P3_VALIDATION.md`](P3_VALIDATION.md).
+
 ## Gate recording
 
 - Format/lint/static checks: run in CI and record the exact command/result.
@@ -121,6 +142,7 @@ apply, atomic writes and state-preserving rejected imports.
 - WebSocket smoke: record initial snapshot, a state event and reconnect.
 - USB checklist: complete `docs/D0_SMOKE_CHECKLIST.md` on Windows with a real
   cable/controller. Linux/CI results must remain `HARDWARE VALIDATION PENDING`.
-- P2 evidence: record separate automated Linux, frontend, Windows build,
+- P2/P3 evidence: record separate automated Linux, frontend, Windows build,
   physical USB and limitation sections in `docs/P2_VALIDATION.md`; automated
-  green tests do not substitute for physical DualSense evidence.
+  green tests do not substitute for physical DualSense evidence. P3-specific
+  results belong in `docs/P3_VALIDATION.md`.

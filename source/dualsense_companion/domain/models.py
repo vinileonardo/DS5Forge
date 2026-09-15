@@ -7,7 +7,7 @@ values before the rest of the application can observe them.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping as ABCMapping
 from dataclasses import dataclass, field, fields, is_dataclass
 from enum import StrEnum
 from math import isfinite
@@ -15,6 +15,13 @@ from types import MappingProxyType
 from typing import Any, ClassVar
 
 from .errors import ErrorCode
+from .games import (
+    AutomationState,
+    CompatibilityState,
+    ConflictDiagnostic,
+    ForegroundApplication,
+    SyntheticOutputState,
+)
 
 
 class ConnectionState(StrEnum):
@@ -43,7 +50,7 @@ class ControllerCapabilities:
     microphone_button: bool = True
     lightbar: bool = True
     adaptive_triggers: bool = False
-    availability: Mapping[str, CapabilityAvailability] = field(default_factory=dict)
+    availability: ABCMapping[str, CapabilityAvailability] = field(default_factory=dict)
 
     _NAMES: ClassVar[tuple[str, ...]] = (
         "usb",
@@ -141,7 +148,7 @@ class AudioSnapshot:
 class HealthSnapshot:
     process_alive: bool = True
     controller_available: bool = False
-    subsystems: Mapping[str, str] = field(default_factory=dict)
+    subsystems: ABCMapping[str, str] = field(default_factory=dict)
     degraded: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -174,7 +181,7 @@ class ErrorSnapshot:
     message: str
     detail: str | None = None
     recoverable: bool = True
-    fields: Mapping[str, Any] = field(default_factory=dict)
+    fields: ABCMapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "fields", MappingProxyType(dict(self.fields)))
@@ -296,7 +303,7 @@ class ControllerInput:
         return self.sticks.right_y
 
     @property
-    def buttons(self) -> Mapping[str, bool]:
+    def buttons(self) -> ABCMapping[str, bool]:
         return MappingProxyType(
             {
                 "square": self.square,
@@ -506,7 +513,7 @@ class ControllerProfile:
 
     name: str
     schema_version: int = 2
-    rumble: Mapping[str, Any] = field(default_factory=dict)
+    rumble: ABCMapping[str, Any] = field(default_factory=dict)
     lightbar: LightbarState = field(default_factory=LightbarState)
     triggers: TriggerState = field(default_factory=TriggerState)
     sticks: StickCalibration = field(default_factory=StickCalibration)
@@ -549,6 +556,11 @@ class RuntimeSnapshot:
     health: HealthSnapshot = field(default_factory=HealthSnapshot)
     sequence: int = 0
     updated_at: float = 0.0
+    foreground: ForegroundApplication = field(default_factory=ForegroundApplication)
+    automation: AutomationState = field(default_factory=AutomationState)
+    compatibility: CompatibilityState = field(default_factory=CompatibilityState)
+    synthetic_outputs: SyntheticOutputState = field(default_factory=SyntheticOutputState)
+    conflicts: tuple[ConflictDiagnostic, ...] = ()
 
     @classmethod
     def initial(cls, *, touchpad_enabled: bool = True, now: float = 0.0) -> RuntimeSnapshot:
@@ -563,7 +575,7 @@ def _jsonable(value: Any) -> Any:
         return value.to_dict()
     if isinstance(value, StrEnum):
         return value.value
-    if isinstance(value, Mapping):
+    if isinstance(value, ABCMapping):
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):
         return [_jsonable(item) for item in value]
@@ -598,7 +610,7 @@ def _clamp_zero_one(value: Any) -> float:
 
 
 def _read_value(value: Any, *names: str, default: Any = None) -> Any:
-    if isinstance(value, Mapping):
+    if isinstance(value, ABCMapping):
         for name in names:
             if name in value:
                 return value[name]

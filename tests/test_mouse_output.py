@@ -54,6 +54,38 @@ class MouseOutputTests(unittest.TestCase):
                 output.button(True, True)
         self.assertFalse(output._left_down)
 
+    def test_named_mouse4_is_tracked_and_released(self):
+        user32 = FakeUser32()
+        output = WindowsMouseOutput()
+        with patch.object(ctypes, "windll", Loader(user32), create=True):
+            output.button_code("Mouse4", True)
+            self.assertIn("mouse4", output._extra_down)
+            output.release_all()
+        self.assertNotIn("mouse4", output._extra_down)
+        self.assertEqual(user32.calls, 2)
+
+    def test_shared_touchpad_and_remap_owner_do_not_release_each_other(self):
+        user32 = FakeUser32()
+        output = WindowsMouseOutput()
+        with patch.object(ctypes, "windll", Loader(user32), create=True):
+            # Touchpad/L3 uses the legacy boolean surface while P3 remapping
+            # uses the named-button surface. They intentionally share the
+            # same physical ownership counter.
+            output.button(True, True)
+            output.button_code("left", True)
+            self.assertEqual(output._button_refcounts["left"], 2)
+            self.assertEqual(user32.calls, 1)
+
+            output.button(True, False)
+            self.assertTrue(output._left_down)
+            self.assertEqual(output._button_refcounts["left"], 1)
+            self.assertEqual(user32.calls, 1)
+
+            output.button_code("left", False)
+            self.assertFalse(output._left_down)
+            self.assertNotIn("left", output._button_refcounts)
+            self.assertEqual(user32.calls, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

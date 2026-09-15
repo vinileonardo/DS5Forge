@@ -3,13 +3,23 @@ import { z } from "zod";
 import {
   AudioSchema,
   ConfigSchema,
+  CompatibilityStateSchema,
+  ConflictDiagnosticSchema,
   ControllerLabEventSchema,
   ControllerInputSchema,
   ControllerTelemetrySchema,
   ConnectionStateSchema,
   ErrorSnapshotSchema,
   EventEnvelopeSchema,
+  ForegroundApplicationSchema,
+  GameActivatedEventSchema,
+  GameDeactivatedEventSchema,
+  GameMatchSchema,
+  GameRuleAppliedEventSchema,
+  RuleEvaluationSchema,
+  ReleaseReportSchema,
   RuntimeStateSchema,
+  AutomationChangedEventSchema,
   type RuntimeEvent,
 } from "../api/contracts";
 import { ApiProtocolError } from "../api/errors";
@@ -35,6 +45,15 @@ const KNOWN_TYPES = new Set([
   "profile.changed",
   "controller.lab",
   "diagnostic",
+  "game.foreground_changed",
+  "game.detected",
+  "game.activated",
+  "game.deactivated",
+  "game.rule_applied",
+  "compatibility.changed",
+  "game.conflict_detected",
+  "automation.changed",
+  "synthetic.release",
 ]);
 const KNOWN_LAB_KINDS = new Set([
   "lightbar.applied",
@@ -152,6 +171,101 @@ export function parseSocketMessage(value: unknown): ParsedSocketMessage {
           type: envelope.type,
           version: 1,
           payload: z.record(z.string(), z.unknown()).parse(envelope.payload),
+        },
+      };
+    case "game.foreground_changed":
+      return {
+        kind: "event",
+        event: {
+          type: envelope.type,
+          version: 1,
+          payload: z
+            .object({
+              foreground: ForegroundApplicationSchema,
+              changed: z.boolean(),
+              previous: ForegroundApplicationSchema,
+            })
+            .strict()
+            .parse(envelope.payload),
+        },
+      };
+    case "game.detected":
+      return {
+        kind: "event",
+        event: {
+          type: envelope.type,
+          version: 1,
+          payload: z
+            .object({
+              match: GameMatchSchema.nullable(),
+              evaluations: z.array(RuleEvaluationSchema),
+              foreground: ForegroundApplicationSchema,
+            })
+            .strict()
+            .parse(envelope.payload),
+        },
+      };
+    case "game.activated":
+      return {
+        kind: "event",
+        event: {
+          type: envelope.type,
+          version: 1,
+          payload: GameActivatedEventSchema.parse(envelope.payload),
+        },
+      };
+    case "game.deactivated":
+      return {
+        kind: "event",
+        event: {
+          type: envelope.type,
+          version: 1,
+          payload: GameDeactivatedEventSchema.parse(envelope.payload),
+        },
+      };
+    case "game.rule_applied":
+      return {
+        kind: "event",
+        event: {
+          type: envelope.type,
+          version: 1,
+          payload: GameRuleAppliedEventSchema.parse(envelope.payload),
+        },
+      };
+    case "automation.changed":
+      return {
+        kind: "event",
+        event: {
+          type: envelope.type,
+          version: 1,
+          payload: AutomationChangedEventSchema.parse(envelope.payload),
+        },
+      };
+    case "compatibility.changed":
+      return {
+        kind: "event",
+        event: {
+          type: envelope.type,
+          version: 1,
+          payload: z.object({ compatibility: CompatibilityStateSchema }).strict().parse(envelope.payload),
+        },
+      };
+    case "game.conflict_detected":
+      return {
+        kind: "event",
+        event: {
+          type: envelope.type,
+          version: 1,
+          payload: z.object({ conflict: ConflictDiagnosticSchema }).strict().parse(envelope.payload),
+        },
+      };
+    case "synthetic.release":
+      return {
+        kind: "event",
+        event: {
+          type: envelope.type,
+          version: 1,
+          payload: z.object({ report: ReleaseReportSchema }).strict().parse(envelope.payload),
         },
       };
     default:

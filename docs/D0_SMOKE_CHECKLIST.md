@@ -131,3 +131,41 @@ registrados separadamente em `docs/P2_VALIDATION.md`.
 - [x] auditoria de fronteira confirma que a UI não importa `pydualsense`, WASAPI ou APIs HID;
 - [x] auditoria USB-only confirma que P2 não adicionou Bluetooth, pairing ou transporte wireless;
 - [ ] Windows + DualSense USB físico: permanece `HARDWARE VALIDATION PENDING` até evidência real ser anexada.
+
+## Registro P3 — Games / compatibility / automation
+
+Estas verificações continuam exigindo Windows e um DualSense conectado por
+USB. A UI e os testes com fakes não substituem a prova física.
+
+- [ ] abrir `/games` sem jogo em foreground e confirmar `No active game`;
+- [ ] confirmar foreground com nome do executável, PID, título e timestamp;
+- [ ] cadastrar uma regra por nome de executável e confirmar `Test match` com razão;
+- [ ] habilitar automation e confirmar aplicação automática do perfil no jogo;
+- [ ] trocar jogo A → jogo B e confirmar que a nova regra/profile é aplicada;
+- [ ] fechar o jogo ou voltar ao desktop e confirmar a política selecionada;
+- [ ] verificar `restore_previous` (default), `apply_default` e `keep_current`;
+- [ ] alterar profile/mode manualmente e confirmar manual override até transição real;
+- [ ] configurar mapping simples e chord; confirmar precedência, debounce e release;
+- [ ] confirmar mapping de mouse left/right/middle e Mouse4/Mouse5, incluindo release após teardown;
+- [ ] desconectar/reconectar, trocar mode/profile e fechar o app; confirmar que
+  nenhuma tecla/botão sintético fica pressionado;
+- [ ] confirmar Native como default e Remap apenas quando explicitamente escolhido;
+- [ ] confirmar Virtual/XInput como `Unavailable` sem provider aprovado e sem
+  mudança silenciosa do mode;
+- [ ] confirmar aviso de Steam/remapper como possibilidade baseada apenas em
+  nome de processo, sem matar/reconfigurar software externo;
+- [ ] quando enumeração de processos estiver indisponível, confirmar que a UI
+  informa que não foi possível inspecionar em vez de afirmar que o processo não existe;
+- [ ] validar foreground de um jogo/processo que permita apenas query limitada e
+  confirmar que o caminho/nome do executável ainda é obtido sem exigir VM_READ;
+- [ ] confirmar que a página atualiza active game por WebSocket sem reload.
+
+## Gate P3
+
+- [x] contratos, registry separado, foreground worker, remapping, compatibility
+  gating e Games UI implementados para revisão independente;
+- [x] Virtual/XInput permanece indisponível em produção por decisão técnica;
+- [x] nenhuma implementação Bluetooth/wireless, driver, installer ou nova
+  permissão Tauri adicionada;
+- [ ] Windows foreground/SendInput e DualSense USB físico permanecem
+  `HARDWARE VALIDATION PENDING` até evidência real ser anexada.

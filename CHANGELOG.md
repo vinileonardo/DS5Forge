@@ -4,6 +4,38 @@ All notable changes to DS5Forge will be documented in this file.
 
 The project currently evolves from the upstream `Casliyan/DS5companion` baseline recorded in `UPSTREAM.md`.
 
+## Unreleased — P3 Compatibility / Games / Automation — 2026-09-14
+
+### Added
+
+- `/games` UI with foreground executable diagnostics, active-game/profile
+  state, automation, exit policy, registry editor, match explanations,
+  mappings, chords and conflict warnings.
+- Strict schema-v2 `games.json` persistence separate from P2 `config.json`, with multiple executable identities per game and migration from the unreleased P3 schema-v1 shape.
+  including atomic writes, recovery to safe in-memory defaults and structured
+  validation errors.
+- Executable-based auto-profile transitions for game A → game B, game →
+  desktop/process exit, manual override and `restore_previous`,
+  `apply_default` and `keep_current` policies.
+- Versioned P3 HTTP/WebSocket contracts, foreground/process Windows adapters,
+  keyboard SendInput ownership, chord precedence/debounce and synthetic
+  release reports.
+- Explicit Native, Remap and Virtual/XInput capability state with an
+  injectable fake provider for tests.
+
+### Safety and scope
+
+- Native remains the default and creates no synthetic output. Remap is opt-in;
+  virtual activation is rejected without an approved provider that can safely
+  suppress physical input.
+- Conflict diagnostics are process-name evidence only. DS5Forge never claims
+  Steam Input is active, kills processes or changes external settings.
+- P3 remains USB/wired only and adds no Bluetooth/wireless transport, driver,
+  installer or new Tauri permission.
+- Automated/source-level evidence can be handed to independent review;
+  Windows foreground/SendInput, packaged builds and physical DualSense USB
+  evidence remain `HARDWARE VALIDATION PENDING`.
+
 ## Unreleased — P2 Controller Lab / DualSense Depth — 2026-09-14
 
 ### Added

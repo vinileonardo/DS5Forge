@@ -2,12 +2,21 @@ import { z } from "zod";
 
 import {
   ConfigSchema,
+  AutomationStateSchema,
+  ChordsResponseSchema,
+  CompatibilityStateSchema,
+  ConflictDiagnosticsResponseSchema,
   type ConfigPatch,
   ControllerTelemetrySchema,
+  ForegroundApplicationSchema,
+  GameDefinitionSchema,
+  GameMatchResponseSchema,
+  GamesResponseSchema,
   FullControllerProfileSchema,
   GestureConfigSchema,
   HapticsTestRunSchema,
   LightbarSchema,
+  MappingsResponseSchema,
   DeleteProfileResponseSchema,
   HealthResponseSchema,
   ProfileLoadResponseSchema,
@@ -18,6 +27,13 @@ import {
   StickCalibrationSchema,
   TriggerPreviewSchema,
   TriggerStateSchema,
+  type AutomationState,
+  type Chord,
+  type CompatibilityState,
+  type ConflictDiagnostic,
+  type ForegroundApplication,
+  type GameDefinition,
+  type Mapping,
   type ControllerProfile,
   type ControllerTelemetry,
   type GestureConfig,
@@ -116,6 +132,58 @@ const jsonPost = (value?: unknown): RequestInit => ({
 export const api = {
   health: () => request("/health", HealthResponseSchema),
   state: () => request("/state", RuntimeStateSchema),
+  games: () => request("/games", GamesResponseSchema),
+  addGame: (game: GameDefinition) =>
+    request("/games", GameDefinitionSchema, {
+      ...jsonPost(game),
+      headers: { "Content-Type": "application/json" },
+    }),
+  getGame: (id: string) => request(`/games/${encodeURIComponent(id)}`, GameDefinitionSchema),
+  updateGame: (id: string, game: GameDefinition) =>
+    request(`/games/${encodeURIComponent(id)}`, GameDefinitionSchema, {
+      ...jsonPut(game),
+      headers: { "Content-Type": "application/json" },
+    }),
+  deleteGame: (id: string) =>
+    request(`/games/${encodeURIComponent(id)}`, z.object({ deleted: z.string() }).strict(), {
+      method: "DELETE",
+    }),
+  activeGame: () =>
+    request(
+      "/games/active",
+      z
+        .object({ game: GameDefinitionSchema.nullable(), automation: z.record(z.string(), z.unknown()) })
+        .strict(),
+    ),
+  foreground: () => request<ForegroundApplication>("/foreground", ForegroundApplicationSchema),
+  automation: () => request<AutomationState>("/automation", AutomationStateSchema),
+  updateAutomation: (patch: Partial<Pick<AutomationState, "enabled" | "exit_policy" | "default_profile">>) =>
+    request<AutomationState>("/automation", AutomationStateSchema, {
+      ...jsonPut(patch),
+      headers: { "Content-Type": "application/json" },
+    }),
+  compatibility: () => request<CompatibilityState>("/compatibility", CompatibilityStateSchema),
+  updateCompatibility: (mode: CompatibilityState["mode"]) =>
+    request<CompatibilityState>("/compatibility", CompatibilityStateSchema, {
+      ...jsonPut({ mode }),
+      headers: { "Content-Type": "application/json" },
+    }),
+  mappings: () => request("/mappings", MappingsResponseSchema),
+  updateMappings: (mappings: Mapping[]) =>
+    request("/mappings", MappingsResponseSchema, {
+      ...jsonPut({ mappings }),
+      headers: { "Content-Type": "application/json" },
+    }),
+  chords: () => request("/chords", ChordsResponseSchema),
+  updateChords: (chords: Chord[]) =>
+    request("/chords", ChordsResponseSchema, {
+      ...jsonPut({ chords }),
+      headers: { "Content-Type": "application/json" },
+    }),
+  testGameMatch: (id: string) =>
+    request(`/games/${encodeURIComponent(id)}/test-match`, GameMatchResponseSchema, jsonPost()),
+  conflictDiagnostics: () =>
+    request<{ conflicts: ConflictDiagnostic[] }>("/diagnostics/conflicts", ConflictDiagnosticsResponseSchema),
   config: () => request("/config", ConfigSchema),
   updateConfig: (patch: ConfigPatch) => request("/config", ConfigSchema, json(patch)),
   profiles: () => request("/profiles", ProfilesResponseSchema),

@@ -5,6 +5,7 @@ import { AppShell } from "../components/layout/AppShell";
 import { DiagnosticsPage } from "../features/diagnostics/DiagnosticsPage";
 import { ControllerLabPage } from "../features/controller/ControllerLabPage";
 import { HapticsPage } from "../features/haptics/HapticsPage";
+import { GamesPage } from "../features/games/GamesPage";
 import { OverviewPage } from "../features/overview/OverviewPage";
 import { ProfilesPage } from "../features/profiles/ProfilesPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
@@ -28,6 +29,7 @@ function RoutedApp() {
         <Route path="haptics" element={<HapticsPage />} />
         <Route path="touchpad" element={<TouchpadPage />} />
         <Route path="controller" element={<ControllerLabPage />} />
+        <Route path="games" element={<GamesPage />} />
         <Route path="profiles" element={<ProfilesPage />} />
         <Route path="diagnostics" element={<DiagnosticsPage />} />
         <Route path="settings" element={<SettingsPage />} />

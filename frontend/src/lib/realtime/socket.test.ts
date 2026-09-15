@@ -118,6 +118,101 @@ describe("realtime WebSocket client", () => {
     ).toThrow();
   });
 
+  it("parses P3 foreground/game events with strict match and compatibility contracts", () => {
+    const foreground = {
+      available: true,
+      pid: 42,
+      executable_name: "game.exe",
+      executable_path: "C:\\Games\\game.exe",
+      title: "Game",
+      observed_at: 10,
+      process_alive: true,
+      diagnostic: null,
+    };
+    const parsed = parseSocketMessage({
+      type: "game.detected",
+      version: 1,
+      payload: {
+        match: {
+          game_id: "game",
+          game_name: "Game",
+          matched: true,
+          reason: "Executable name and configured path matched.",
+          foreground,
+        },
+        evaluations: [],
+        foreground,
+      },
+    });
+    expect(parsed.kind).toBe("event");
+    if (parsed.kind === "event" && parsed.event.type === "game.detected") {
+      expect(parsed.event.payload.match?.game_id).toBe("game");
+    }
+
+    expect(() =>
+      parseSocketMessage({
+        type: "game.detected",
+        version: 1,
+        payload: { match: { game_id: "game" }, evaluations: [], foreground },
+      }),
+    ).toThrow();
+
+    const compatibility = {
+      mode: "native",
+      available: true,
+      virtual_capability: {
+        installed: false,
+        available: false,
+        physical_suppression_supported: false,
+        provider: null,
+        reason: "No approved virtual-controller provider is installed.",
+      },
+      physical_input_visible: true,
+      virtual_input_active: false,
+      physical_suppression_active: false,
+      double_input_risk: false,
+      reason: null,
+      changed_at: 10,
+    };
+    expect(
+      parseSocketMessage({
+        type: "compatibility.changed",
+        version: 1,
+        payload: { compatibility },
+      }),
+    ).toMatchObject({ kind: "event", event: { type: "compatibility.changed" } });
+
+    expect(
+      parseSocketMessage({
+        type: "synthetic.release",
+        version: 1,
+        payload: {
+          report: {
+            reason: "game_change",
+            released: [{ kind: "keyboard", code: "CTRL+S" }],
+            failures: [],
+            completed: true,
+          },
+        },
+      }),
+    ).toMatchObject({ kind: "event", event: { type: "synthetic.release" } });
+    expect(() =>
+      parseSocketMessage({
+        type: "synthetic.release",
+        version: 1,
+        payload: {
+          report: {
+            reason: "game_change",
+            released: [],
+            failures: [],
+            completed: true,
+            unexpected: true,
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
   it("parses known lab events strictly and ignores future lab kinds", () => {
     const lightbar = {
       r: 10,
