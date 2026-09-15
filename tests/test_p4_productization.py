@@ -352,7 +352,7 @@ class TestTauriReleaseContract(unittest.TestCase):
         installer = (ROOT / "scripts/build_installer.py").read_text(encoding="utf-8")
         self.assertIn('"createUpdaterArtifacts": True', installer)
         self.assertIn('-Filter "*-setup.exe"', workflow)
-        self.assertNotIn('*.nsis.zip', workflow)
+        self.assertNotIn("*.nsis.zip", workflow)
 
     def test_tauri_capabilities_stay_minimal(self) -> None:
         capabilities = json.loads((ROOT / "frontend/src-tauri/capabilities/default.json").read_text(encoding="utf-8"))
