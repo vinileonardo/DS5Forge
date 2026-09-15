@@ -265,6 +265,18 @@ class P4ProductizationTests(unittest.TestCase):
         result = evaluate_update("0.4.0", metadata)
         self.assertEqual(result["status"], "rejected_downgrade")
 
+    def test_update_uses_semver_prerelease_precedence(self) -> None:
+        def metadata(version: str) -> UpdateMetadata:
+            return UpdateMetadata.from_dict(
+                {"version": version, "signature": "signed", "installer_url": "https://example.test/update.exe"}
+            )
+
+        self.assertEqual(evaluate_update("0.4.0-rc.1", metadata("0.4.0-rc.2"))["status"], "available")
+        self.assertEqual(evaluate_update("0.4.0-rc.2", metadata("0.4.0"))["status"], "available")
+        self.assertEqual(evaluate_update("0.4.0", metadata("0.4.0-rc.2"))["status"], "rejected_downgrade")
+        self.assertEqual(evaluate_update("0.4.0-rc.2", metadata("0.4.0-rc.10"))["status"], "available")
+        self.assertEqual(evaluate_update("0.4.0+build.1", metadata("0.4.0+build.2"))["status"], "up_to_date")
+
     def test_stop_core_releases_outputs_stops_tunnel_and_signals_shutdown(self) -> None:
         facade = FakeFacade()
         tunnel = FakeTunnel()
