@@ -12,6 +12,15 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+STABLE_UPDATE_ENDPOINT = "https://github.com/vinileonardo/DS5Forge/releases/latest/download/latest.json"
+RC_UPDATE_ENDPOINT = "https://github.com/vinileonardo/DS5Forge/releases/download/update-rc/latest.json"
+
+
+def updater_endpoint(version: str) -> str:
+    """Return the immutable release channel embedded in this build."""
+
+    normalized = version.split("+", 1)[0]
+    return RC_UPDATE_ENDPOINT if "-" in normalized else STABLE_UPDATE_ENDPOINT
 
 
 def main() -> int:
@@ -30,6 +39,7 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     config_path: Path | None = None
     try:
         command = ["npm", "run", "tauri:build", "--"]
@@ -42,7 +52,7 @@ def main() -> int:
                 "plugins": {
                     "updater": {
                         "pubkey": os.environ["TAURI_SIGNING_PUBLIC_KEY"],
-                        "endpoints": ["https://github.com/vinileonardo/DS5Forge/releases/latest/download/latest.json"],
+                        "endpoints": [updater_endpoint(version)],
                     }
                 },
             }
