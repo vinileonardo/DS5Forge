@@ -1,10 +1,11 @@
 """DualSense Companion — audio-driven rumble and touchpad mouse for PC."""
 
 import ctypes
+import logging
 import os
 import sys
 
-__version__ = "1.0.0"
+from .version import __version__ as __version__
 
 # When frozen by PyInstaller, hidapi.dll is bundled at the extraction root.
 # cffi looks it up by name, which won't search that folder, so preload it by
@@ -14,5 +15,6 @@ if getattr(sys, "frozen", False):
     if os.path.exists(_dll):
         try:
             ctypes.CDLL(_dll)
-        except OSError:
-            pass
+        except OSError as exc:
+            # PyInstaller can still resolve the DLL by its bundled path.
+            logging.getLogger(__name__).debug("optional hidapi preload failed: %s", exc)

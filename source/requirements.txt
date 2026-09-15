@@ -1,4 +1,6 @@
-numpy
-pydualsense
-PyAudioWPatch
+pydualsense>=0.7.5,<0.8
+PyAudioWPatch>=0.2.12.8,<0.3
 customtkinter
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+pydantic>=2.7,<3

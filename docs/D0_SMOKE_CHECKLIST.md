@@ -80,3 +80,112 @@ Registrar no review D0/P0:
 ## Gate
 
 P0 não deve alegar regressão zero do baseline sem este checklist ou testes automatizados equivalentes para o comportamento alterado.
+
+## Registro P0
+
+- [x] gates automatizados registrados em `docs/P0_VALIDATION.md`;
+- [x] API `/api/v1/health`, `/state`, config e comandos testados em loopback;
+- [x] WebSocket recebe snapshot inicial e evento de mudança;
+- [x] nenhuma referência de hardware é exposta pela GUI/API;
+- [x] shutdown deixa threads, motores e botões sintéticos em estado neutro nos testes automatizados/fakes;
+- [x] Windows + DualSense USB físico permanece explicitamente como `HARDWARE VALIDATION PENDING`;
+- [x] auditoria de código confirma que P0 não adicionou Bluetooth/wireless.
+
+## Registro P1 — browser/Tauri
+
+Estas verificações cobrem a nova apresentação e não substituem a validação
+física Windows + DualSense USB acima.
+
+- [ ] iniciar `python source/run.py --headless` e `npm run dev` em terminais separados;
+- [ ] abrir `http://127.0.0.1:5173` e confirmar Overview, status do core e estado do controller;
+- [ ] confirmar que core offline aparece como offline/reconnecting e recupera sem reload;
+- [ ] confirmar que Overview, Haptics, Touchpad, Profiles, Diagnostics e Settings são navegáveis por teclado;
+- [ ] confirmar que Haptics/Touchpad aguardam confirmação do core e exibem 422 estruturado;
+- [ ] confirmar que perfis bundled são read-only e exclusão user exige confirmação;
+- [ ] confirmar que o preview do frontend e o Tauri usam a mesma SPA;
+- [ ] confirmar que origins remotas, wildcard CORS e bind externo são rejeitados;
+- [ ] confirmar que nenhum recurso P2/P3/P4 ou Bluetooth/wireless aparece como caminho ativo.
+
+## Registro P2 — Controller Lab
+
+Estas verificações cobrem a extensão Controller Lab e continuam exigindo um
+DualSense real conectado por cabo USB. Testes automatizados/frontend devem ser
+registrados separadamente em `docs/P2_VALIDATION.md`.
+
+- [ ] abrir `/controller` e confirmar as abas Input, Triggers, Lighting e Sticks;
+- [ ] Input mostra botões, D-pad, L2/R2, dois sticks e pontos de toque sem expor objeto Windows;
+- [ ] desconectar durante a tela mostra estado stale/offline e desabilita comandos de saída;
+- [ ] reconectar atualiza snapshot sem reload e inicia com motores/gatilhos em estado neutro;
+- [ ] aplicar/resetar lightbar funciona quando a capability é reportada;
+- [ ] trigger preview expira e reseta ambos os gatilhos para Off;
+- [ ] cancelar preview, desconectar e fechar o app também reseta os gatilhos;
+- [ ] haptics test respeita duração máxima, bloqueia duplicata e termina com motores zerados;
+- [ ] ajustar gestos/pontos do touchpad preserva release de botões sintéticos no teardown;
+- [ ] salvar/exportar/importar perfil v2 funciona; overwrite exige confirmação;
+- [ ] perfil bundled continua read-only e capability ausente aparece como motivo explícito;
+- [ ] deadzone/calibration é apresentado como metadata de visualização DS5Forge, sem alterar input nativo do jogo.
+
+## Gate P2
+
+- [x] gates automatizados e limitações registrados em `docs/P2_VALIDATION.md`;
+- [x] auditoria de fronteira confirma que a UI não importa `pydualsense`, WASAPI ou APIs HID;
+- [x] auditoria USB-only confirma que P2 não adicionou Bluetooth, pairing ou transporte wireless;
+- [ ] Windows + DualSense USB físico: permanece `HARDWARE VALIDATION PENDING` até evidência real ser anexada.
+
+## Registro P3 — Games / compatibility / automation
+
+Estas verificações continuam exigindo Windows e um DualSense conectado por
+USB. A UI e os testes com fakes não substituem a prova física.
+
+- [ ] abrir `/games` sem jogo em foreground e confirmar `No active game`;
+- [ ] confirmar foreground com nome do executável, PID, título e timestamp;
+- [ ] cadastrar uma regra por nome de executável e confirmar `Test match` com razão;
+- [ ] habilitar automation e confirmar aplicação automática do perfil no jogo;
+- [ ] trocar jogo A → jogo B e confirmar que a nova regra/profile é aplicada;
+- [ ] fechar o jogo ou voltar ao desktop e confirmar a política selecionada;
+- [ ] verificar `restore_previous` (default), `apply_default` e `keep_current`;
+- [ ] alterar profile/mode manualmente e confirmar manual override até transição real;
+- [ ] configurar mapping simples e chord; confirmar precedência, debounce e release;
+- [ ] confirmar mapping de mouse left/right/middle e Mouse4/Mouse5, incluindo release após teardown;
+- [ ] desconectar/reconectar, trocar mode/profile e fechar o app; confirmar que
+  nenhuma tecla/botão sintético fica pressionado;
+- [ ] confirmar Native como default e Remap apenas quando explicitamente escolhido;
+- [ ] confirmar Virtual/XInput como `Unavailable` sem provider aprovado e sem
+  mudança silenciosa do mode;
+- [ ] confirmar aviso de Steam/remapper como possibilidade baseada apenas em
+  nome de processo, sem matar/reconfigurar software externo;
+- [ ] quando enumeração de processos estiver indisponível, confirmar que a UI
+  informa que não foi possível inspecionar em vez de afirmar que o processo não existe;
+- [ ] validar foreground de um jogo/processo que permita apenas query limitada e
+  confirmar que o caminho/nome do executável ainda é obtido sem exigir VM_READ;
+- [ ] confirmar que a página atualiza active game por WebSocket sem reload.
+
+## Gate P3
+
+- [x] contratos, registry separado, foreground worker, remapping, compatibility
+  gating e Games UI implementados para revisão independente;
+- [x] Virtual/XInput permanece indisponível em produção por decisão técnica;
+- [x] nenhuma implementação Bluetooth/wireless, driver, installer ou nova
+  permissão Tauri adicionada;
+- [ ] Windows foreground/SendInput e DualSense USB físico permanecem
+  `HARDWARE VALIDATION PENDING` até evidência real ser anexada.
+
+## Registro P4 — productization / release / remote
+
+- [ ] clean per-user NSIS install, reinstall and upgrade;
+- [ ] packaged sidecar reaches API readiness and bounded crash recovery leaves
+  no orphan process;
+- [ ] tray Open/status/Show-Hide/Quit and second-instance focus/restore;
+- [ ] autostart is OFF by default and enable/disable is reversible;
+- [ ] signed update download shows passive Windows progress and failed update
+  leaves the current install usable;
+- [ ] uninstall preserves config/profiles/games/logs and leaves no external
+  listener;
+- [ ] Remote OFF has no active session/tunnel; pairing, exact HTTPS Origin,
+  cookie auth, expiration, revocation and disable were checked;
+- [ ] cloudflared absent/invalid/configured states were diagnosed without any
+  download or raw-token export.
+
+Until a real Windows machine records this section, report exactly
+`WINDOWS VALIDATION PENDING`. USB-dependent P4 teardown remains
+`HARDWARE VALIDATION PENDING`.

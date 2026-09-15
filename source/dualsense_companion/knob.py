@@ -5,14 +5,27 @@ import tkinter as tk
 
 import customtkinter as ctk
 
-START_ANGLE = 225.0   # degrees, lower-left
-SWEEP = 270.0         # total travel, gap at the bottom
+START_ANGLE = 225.0  # degrees, lower-left
+SWEEP = 270.0  # total travel, gap at the bottom
 
 
 class Knob(ctk.CTkFrame):
-    def __init__(self, parent, label, lo, hi, step, value, command,
-                 face="#eaeef6", track="#d3dbea", accent="#4d8bf0",
-                 text="#3f4a5a", edge="#ffffff", size=104):
+    def __init__(
+        self,
+        parent,
+        label,
+        lo,
+        hi,
+        step,
+        value,
+        command,
+        face="#eaeef6",
+        track="#d3dbea",
+        accent="#4d8bf0",
+        text="#3f4a5a",
+        edge="#ffffff",
+        size=104,
+    ):
         super().__init__(parent, fg_color=face, corner_radius=18)
         self.lo, self.hi, self.step = lo, hi, step
         self.command = command
@@ -21,11 +34,9 @@ class Knob(ctk.CTkFrame):
         self.value = value
         self.size = size
 
-        self.canvas = tk.Canvas(self, width=size, height=size, highlightthickness=0,
-                                bg=face, bd=0)
+        self.canvas = tk.Canvas(self, width=size, height=size, highlightthickness=0, bg=face, bd=0)
         self.canvas.pack(padx=6, pady=(8, 0))
-        self.name = ctk.CTkLabel(self, text=label, text_color=text,
-                                 font=ctk.CTkFont(size=11), wraplength=size + 10)
+        self.name = ctk.CTkLabel(self, text=label, text_color=text, font=ctk.CTkFont(size=11), wraplength=size + 10)
         self.name.pack(padx=4, pady=(0, 8))
 
         self.canvas.bind("<Button-1>", self._press)
@@ -48,16 +59,25 @@ class Knob(ctk.CTkFrame):
         frac = max(0.0, min(1.0, self._frac()))
 
         # sunken track ring
-        c.create_arc(cx - r, cy - r, cx + r, cy + r, start=START_ANGLE,
-                     extent=-SWEEP, style="arc", outline=self.track, width=8)
+        c.create_arc(
+            cx - r, cy - r, cx + r, cy + r, start=START_ANGLE, extent=-SWEEP, style="arc", outline=self.track, width=8
+        )
         # accent value ring
         if frac > 0:
-            c.create_arc(cx - r, cy - r, cx + r, cy + r, start=START_ANGLE,
-                         extent=-SWEEP * frac, style="arc", outline=self.accent, width=8)
+            c.create_arc(
+                cx - r,
+                cy - r,
+                cx + r,
+                cy + r,
+                start=START_ANGLE,
+                extent=-SWEEP * frac,
+                style="arc",
+                outline=self.accent,
+                width=8,
+            )
         # raised knob body
         br = r - 12
-        c.create_oval(cx - br, cy - br, cx + br, cy + br, fill=self.face,
-                      outline=self.edge, width=2)
+        c.create_oval(cx - br, cy - br, cx + br, cy + br, fill=self.face, outline=self.edge, width=2)
         c.create_oval(cx - br, cy - br + 3, cx + br, cy + br + 3, outline=self.track, width=1)
         # indicator dot
         theta = math.radians(START_ANGLE - SWEEP * frac)
@@ -65,8 +85,7 @@ class Knob(ctk.CTkFrame):
         dy = cy - (r - 4) * math.sin(theta)
         c.create_oval(dx - 4, dy - 4, dx + 4, dy + 4, fill=self.accent, outline="")
         # value text
-        c.create_text(cx, cy, text=self._fmt(), fill=self.text_color,
-                      font=("Segoe UI", 13, "bold"))
+        c.create_text(cx, cy, text=self._fmt(), fill=self.text_color, font=("Segoe UI", 13, "bold"))
 
     def _press(self, e):
         self._press_y = e.y
