@@ -112,6 +112,29 @@ class FacadeTests(unittest.TestCase):
 
             self.assertEqual(pulses, [(0, 140, 0.12)])
 
+    def test_shutdown_stops_audio_haptics_before_controller_neutralization(self):
+        with tempfile.TemporaryDirectory() as temp:
+            facade = CoreFacade(
+                config_repository=self.make_repo(Path(temp)),
+                controller_factory=FakeControllerFactory(),
+                mouse_output=FakeMouse(),
+            )
+            order: list[str] = []
+
+            class FakeHaptics:
+                def stop(self):
+                    order.append("haptics.stop")
+
+            facade._started = True
+            facade._haptics = FakeHaptics()
+            facade._haptics_bench.stop = lambda: None
+            facade._best_effort_preview_reset = lambda **_kwargs: None
+            facade.controller.stop = lambda: order.append("controller.stop")
+
+            facade.stop()
+
+            self.assertEqual(order[:2], ["haptics.stop", "controller.stop"])
+
 
 if __name__ == "__main__":
     unittest.main()

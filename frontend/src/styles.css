@@ -712,6 +712,39 @@ h3 {
   color: var(--muted);
   font-size: 13px;
 }
+.core-restart-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.68);
+}
+.core-restart-status {
+  width: min(420px, 100%);
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 28px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+.core-restart-status strong {
+  font-size: 15px;
+}
+.core-restart-status > span:last-child {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.core-restart-spinner {
+  width: 24px;
+  height: 24px;
+}
 .spinner {
   width: 15px;
   height: 15px;

@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Config } from "../../lib/api/contracts";
+import { api } from "../../lib/api/client";
 import { SettingsPage } from "./SettingsPage";
 
 const model = vi.hoisted(() => ({ value: {} as unknown }));
@@ -10,7 +11,10 @@ vi.mock("../../lib/runtime/RuntimeProvider", () => ({
   useRuntime: () => model.value,
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 function makeConfig(): Config {
   return {
@@ -60,6 +64,26 @@ describe("SettingsPage recovery surfaces", () => {
     expect(screen.getByRole("button", { name: /restart core/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /check for updates/i })).toBeEnabled();
     expect(screen.queryByLabelText("Theme")).not.toBeInTheDocument();
+  });
+
+  it("shows a blocking progress surface while a core restart is in flight", async () => {
+    model.value = { config: null, coreStatus: "offline", updateConfig: vi.fn() };
+    let finishRestart: ((value: Awaited<ReturnType<typeof api.restartCore>>) => void) | undefined;
+    vi.spyOn(api, "restartCore").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishRestart = resolve;
+        }),
+    );
+    render(<SettingsPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /restart core/i }));
+    expect(screen.getByLabelText("Restarting local core")).toBeVisible();
+    expect(screen.getByText("Restarting local core…")).toBeVisible();
+    expect(screen.getByRole("button", { name: /restarting/i })).toBeDisabled();
+
+    finishRestart?.({ state: "running", core: "running", pid: null, message: null });
+    await waitFor(() => expect(screen.queryByLabelText("Restarting local core")).not.toBeInTheDocument());
   });
 });
 

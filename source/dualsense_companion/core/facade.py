@@ -304,8 +304,11 @@ class CoreFacade:
         self._release_synthetic_outputs("shutdown")
         self._haptics_bench.stop()
         self._best_effort_preview_reset(status="reset")
-        self.controller.stop()
+        # Stop audio-driven motor writes before neutralizing/stopping the
+        # controller. Otherwise the haptics worker can race teardown and write
+        # rumble again while ControllerService.stop() is waiting for its thread.
         self._stop_haptics()
+        self.controller.stop()
         self.touchpad.reset()
         self.store.update(
             connection=ConnectionState.DISCONNECTED,

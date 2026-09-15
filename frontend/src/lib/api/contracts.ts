@@ -301,7 +301,7 @@ export const AutomationStateSchema = z
     last_transition_at: finiteNumber,
     status: z.string(),
     diagnostic: z.string().nullable(),
-    foreground: ForegroundApplicationSchema.optional(),
+    foreground: ForegroundApplicationSchema.nullable().optional(),
     active_game: GameDefinitionSchema.nullable().optional(),
   })
   .strict();
