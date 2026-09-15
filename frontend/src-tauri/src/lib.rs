@@ -1,6 +1,10 @@
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
+use std::process::Command as StdCommand;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
@@ -23,6 +27,7 @@ struct CoreSupervisor {
     stopping: Mutex<bool>,
     restart_count: Mutex<u32>,
     generation: Mutex<u64>,
+    terminated_generation: Mutex<u64>,
 }
 
 impl Default for CoreSupervisor {
@@ -38,6 +43,7 @@ impl Default for CoreSupervisor {
             stopping: Mutex::new(false),
             restart_count: Mutex::new(0),
             generation: Mutex::new(0),
+            terminated_generation: Mutex::new(0),
         }
     }
 }
@@ -123,6 +129,60 @@ fn wait_for_core_shutdown(attempts: u32) -> bool {
         std::thread::sleep(Duration::from_millis(250));
     }
     false
+}
+
+fn mark_generation_terminated(state: &CoreSupervisor, generation: u64) {
+    if let Ok(mut terminated) = state.terminated_generation.lock() {
+        *terminated = (*terminated).max(generation);
+    }
+}
+
+fn generation_terminated(state: &CoreSupervisor, generation: u64) -> bool {
+    state
+        .terminated_generation
+        .lock()
+        .map(|terminated| *terminated >= generation)
+        .unwrap_or(false)
+}
+
+fn wait_for_generation_termination(state: &CoreSupervisor, generation: u64, attempts: u32) -> bool {
+    for _ in 0..attempts {
+        if generation_terminated(state, generation) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    generation_terminated(state, generation)
+}
+
+#[cfg(target_os = "windows")]
+fn force_kill_child_tree(child: CommandChild) -> Result<(), String> {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let pid = child.pid();
+    let tree_result = StdCommand::new("taskkill")
+        .arg("/PID")
+        .arg(pid.to_string())
+        .args(["/T", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .status();
+    if matches!(tree_result, Ok(status) if status.success()) {
+        return Ok(());
+    }
+    child.kill().map_err(|error| match tree_result {
+        Ok(status) => {
+            format!("taskkill exited with {status}; fallback sidecar kill failed: {error}")
+        }
+        Err(tree_error) => format!(
+            "taskkill could not start ({tree_error}); fallback sidecar kill failed: {error}"
+        ),
+    })
+}
+
+#[cfg(not(target_os = "windows"))]
+fn force_kill_child_tree(child: CommandChild) -> Result<(), String> {
+    child
+        .kill()
+        .map_err(|error| format!("sidecar kill failed: {error}"))
 }
 
 fn start_core_internal(app: &AppHandle) -> Result<(), String> {
@@ -227,6 +287,11 @@ fn start_core_internal(app: &AppHandle) -> Result<(), String> {
         while let Some(event) = events.recv().await {
             if let CommandEvent::Terminated(payload) = event {
                 let state = monitor_app.state::<CoreSupervisor>();
+                // Record real process termination before checking whether a
+                // coordinated stop/start superseded this monitor. Shutdown and
+                // updater flows must not treat a closed API socket as proof that
+                // the PyInstaller process tree has actually exited.
+                mark_generation_terminated(&state, generation);
                 // A coordinated stop/start bumps the generation. A monitor for
                 // a replaced child must not take or restart the new handle.
                 let current_generation = state.generation.lock().map(|value| *value).unwrap_or(0);
@@ -293,6 +358,11 @@ fn stop_core_internal(app: &AppHandle) -> Result<(), String> {
         .stopping
         .lock()
         .map_err(|_| "core state lock poisoned")? = true;
+    let active_generation = state
+        .generation
+        .lock()
+        .map(|generation| *generation)
+        .map_err(|_| "core state lock poisoned")?;
     if let Ok(mut generation) = state.generation.lock() {
         *generation = (*generation).saturating_add(1);
     }
@@ -302,26 +372,39 @@ fn stop_core_internal(app: &AppHandle) -> Result<(), String> {
         .lock()
         .map_err(|_| "core state lock poisoned")?
         .take();
+    let mut forced_tree_kill = false;
     if let Some(child) = child {
-        // Ask the sidecar to release hardware/tunnel and terminate itself. A
-        // one-file PyInstaller bootloader only exits once its child exits, so
-        // waiting for the loopback port to close avoids orphaning that child.
-        let api_was_open = core_api_is_open();
+        // Ask the sidecar to release hardware/tunnel and terminate itself. The
+        // API socket can close before non-daemon controller/audio threads have
+        // actually exited, so process termination (CommandEvent::Terminated)
+        // is authoritative for quit/update safety, not port closure alone.
         request_core_shutdown();
-        let graceful = api_was_open && wait_for_core_shutdown(12);
-        if !graceful {
-            let kill_error = child.kill().err();
-            if !wait_for_core_shutdown(32) {
+        let _ = wait_for_core_shutdown(12);
+        if !wait_for_generation_termination(&state, active_generation, 20) {
+            forced_tree_kill = true;
+            let kill_error = force_kill_child_tree(child).err();
+            let terminated = wait_for_generation_termination(&state, active_generation, 20);
+            let api_closed = wait_for_core_shutdown(20);
+            if !terminated || !api_closed {
                 let message = match kill_error {
-                    Some(error) => format!("core shutdown failed: {error}"),
-                    None => "core API remained reachable after shutdown timeout".to_owned(),
+                    Some(error) => format!("core process-tree shutdown failed: {error}"),
+                    None if !terminated => {
+                        "core process tree did not terminate after forced shutdown".to_owned()
+                    }
+                    None => "core API remained reachable after process-tree shutdown".to_owned(),
                 };
                 set_snapshot(app, &state, "shutdown_timeout", Some(message.clone()));
                 return Err(message);
             }
+        } else if !wait_for_core_shutdown(4) {
+            let message = "core process exited but the loopback API remained reachable".to_owned();
+            set_snapshot(app, &state, "shutdown_timeout", Some(message.clone()));
+            return Err(message);
         }
     }
-    set_snapshot(app, &state, "core_stopped", None);
+    let message =
+        forced_tree_kill.then(|| "core required forced process-tree termination".to_owned());
+    set_snapshot(app, &state, "core_stopped", message);
     Ok(())
 }
 
@@ -366,10 +449,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
                     }
                 }
             }
-            "quit" => {
-                let _ = stop_core_internal(app);
-                app.exit(0);
-            }
+            "quit" => app.exit(0),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -436,8 +516,18 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building DS5Forge Tauri application")
         .run(|app, event| {
-            if matches!(event, RunEvent::Exit) {
-                let _ = stop_core_internal(app);
+            if let RunEvent::ExitRequested { api, .. } = event {
+                if stop_core_internal(app).is_err() {
+                    // Never let a user-initiated/programmatic exit orphan a
+                    // packaged core. Keep the shell alive so Diagnostics can
+                    // surface the bounded teardown failure and the user can
+                    // retry recovery. Tauri ignores prevent_exit only for its
+                    // dedicated restart exit code; the updater stops the core
+                    // explicitly before installation and does not rely on that
+                    // restart path.
+                    api.prevent_exit();
+                    show_main(app);
+                }
             }
         });
 }

@@ -372,6 +372,27 @@ class TestTauriReleaseContract(unittest.TestCase):
         self.assertIn('"websockets"', spec)
         self.assertIn('("customtkinter", "fastapi", "uvicorn", "websockets")', spec)
 
+    def test_tauri_shutdown_waits_for_real_sidecar_exit_and_kills_pyinstaller_tree(self) -> None:
+        rust = (ROOT / "frontend/src-tauri/src/lib.rs").read_text(encoding="utf-8")
+        self.assertIn("terminated_generation: Mutex<u64>", rust)
+        self.assertIn("mark_generation_terminated(&state, generation);", rust)
+        self.assertIn("wait_for_generation_termination(&state, active_generation", rust)
+        self.assertIn('StdCommand::new("taskkill")', rust)
+        self.assertIn('.args(["/T", "/F"])', rust)
+        self.assertIn("creation_flags(CREATE_NO_WINDOW)", rust)
+        self.assertIn("core required forced process-tree termination", rust)
+        self.assertIn("RunEvent::ExitRequested", rust)
+        self.assertIn("api.prevent_exit();", rust)
+        self.assertNotIn(
+            '"quit" => {\n                let _ = stop_core_internal(app);\n                app.exit(0);', rust
+        )
+
+    def test_packaged_core_smoke_rejects_lingering_windows_processes(self) -> None:
+        smoke = (ROOT / "scripts/smoke_packaged_core.py").read_text(encoding="utf-8")
+        self.assertIn('"tasklist"', smoke)
+        self.assertIn("_wait_for_windows_pids_gone", smoke)
+        self.assertIn("Packaged core left Windows process(es) alive", smoke)
+
     def test_windows_gui_subsystem_attribute_is_on_binary_entrypoint(self) -> None:
         main = (ROOT / "frontend/src-tauri/src/main.rs").read_text(encoding="utf-8")
         library = (ROOT / "frontend/src-tauri/src/lib.rs").read_text(encoding="utf-8")

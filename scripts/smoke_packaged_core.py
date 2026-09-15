@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
 import hashlib
 import json
 import os
@@ -150,6 +151,39 @@ def wait_for_health(process: subprocess.Popen[bytes], host: str, port: int, time
     raise SmokeFailure(f"Packaged core health was not reachable within {timeout:.1f}s: {last_error}")
 
 
+def _windows_image_pids(image_name: str) -> set[int]:
+    if os.name != "nt":
+        return set()
+    result = subprocess.run(
+        ["tasklist", "/FI", f"IMAGENAME eq {image_name}", "/FO", "CSV", "/NH"],
+        capture_output=True,
+        text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        check=False,
+    )
+    pids: set[int] = set()
+    for row in csv.reader(result.stdout.splitlines()):
+        if len(row) < 2 or row[0].casefold() != image_name.casefold():
+            continue
+        try:
+            pids.add(int(row[1]))
+        except ValueError:
+            continue
+    return pids
+
+
+def _wait_for_windows_pids_gone(image_name: str, pids: set[int], timeout: float = 5.0) -> set[int]:
+    if os.name != "nt" or not pids:
+        return set()
+    deadline = time.monotonic() + timeout
+    remaining = pids
+    while remaining and time.monotonic() < deadline:
+        remaining = pids.intersection(_windows_image_pids(image_name))
+        if remaining:
+            time.sleep(0.2)
+    return remaining
+
+
 def _stop_process_tree(process: subprocess.Popen[bytes]) -> None:
     if process.poll() is not None:
         return
@@ -174,6 +208,8 @@ def smoke(executable: Path, *, host: str, port: int, startup_timeout: float) -> 
 
     command = [str(executable), "--headless", "--host", host, "--port", str(port)]
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    baseline_pids = _windows_image_pids(executable.name)
+    launched_pids: set[int] = set()
     with tempfile.TemporaryFile() as output:
         process = subprocess.Popen(
             command,
@@ -183,6 +219,13 @@ def smoke(executable: Path, *, host: str, port: int, startup_timeout: float) -> 
         )
         try:
             health = wait_for_health(process, host, port, startup_timeout)
+            if os.name == "nt":
+                for _ in range(10):
+                    launched_pids.update(_windows_image_pids(executable.name) - baseline_pids)
+                    if process.pid in launched_pids and len(launched_pids) >= 2:
+                        break
+                    time.sleep(0.1)
+                launched_pids.add(process.pid)
             snapshot = websocket_snapshot(host, port)
             state = snapshot.get("payload", {}).get("state", {}) if isinstance(snapshot.get("payload"), dict) else {}
             print(
@@ -200,6 +243,12 @@ def smoke(executable: Path, *, host: str, port: int, startup_timeout: float) -> 
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired as exc:
                 raise SmokeFailure("Packaged core did not exit after lifecycle stop") from exc
+            remaining = _wait_for_windows_pids_gone(executable.name, launched_pids)
+            if remaining:
+                raise SmokeFailure(
+                    "Packaged core left Windows process(es) alive after lifecycle stop: "
+                    + ", ".join(str(pid) for pid in sorted(remaining))
+                )
         except Exception:
             output.seek(0)
             captured = output.read().decode("utf-8", errors="replace")[-8000:]
