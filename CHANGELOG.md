@@ -4,6 +4,21 @@ All notable changes to DS5Forge will be documented in this file.
 
 The project currently evolves from the upstream `Casliyan/DS5companion` baseline recorded in `UPSTREAM.md`.
 
+## 0.4.0-rc.3 — Release Candidate 3 — 2026-09-15
+
+### Recovery UX hardening
+
+- Keeps desktop-shell recovery controls available when the local core is offline instead of replacing the entire Settings page with a core-dependent empty state.
+- `Check for updates`, `Restart core` and autostart remain available independently of core-backed preferences.
+- Core-owned Appearance, microphone, Remote Access and Support Bundle actions stay unavailable or disabled while the core is offline.
+- Removes source-development instructions from the installed Settings surface and states that the desktop shell manages the packaged core.
+- Adds a regression test proving signed updates remain reachable with `config=null` and `coreStatus=offline`.
+
+### Validation intent
+
+- RC1 → RC2 updater UI proof could not be completed because RC1 hid the updater whenever the core was offline; this is recorded as an RC1 recovery UX defect rather than treated as updater success.
+- Install RC2 as the corrected runtime baseline, then validate the signed in-app updater end-to-end with RC2 → RC3.
+
 ## 0.4.0-rc.2 — Release Candidate 2 — 2026-09-15
 
 ### Stabilization fixes from RC1 Windows validation

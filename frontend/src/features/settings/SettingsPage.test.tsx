@@ -50,6 +50,19 @@ function makeValue(updateConfig: (patch: unknown) => Promise<Config>) {
   return { config: makeConfig(), coreStatus: "online", updateConfig };
 }
 
+describe("SettingsPage recovery surfaces", () => {
+  it("keeps desktop recovery and signed updates available while the core is offline", async () => {
+    model.value = { config: null, coreStatus: "offline", updateConfig: vi.fn() };
+    render(<SettingsPage />);
+
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeVisible();
+    expect(screen.getByText("Core preferences unavailable")).toBeVisible();
+    expect(screen.getByRole("button", { name: /restart core/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /check for updates/i })).toBeEnabled();
+    expect(screen.queryByLabelText("Theme")).not.toBeInTheDocument();
+  });
+});
+
 describe("SettingsPage draft handling", () => {
   it("preserves an unsaved setting across a config refresh", async () => {
     model.value = makeValue(vi.fn());

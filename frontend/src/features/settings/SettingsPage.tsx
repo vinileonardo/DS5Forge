@@ -69,17 +69,7 @@ export function SettingsPage() {
   }, [config, dirty]);
 
   useEffect(() => {
-    if (coreStatus !== "online") return;
     let mounted = true;
-    void Promise.allSettled([api.appInfo(), api.lifecycle(), api.remoteStatus(), api.tunnelStatus()]).then(
-      ([info, state, remoteState, tunnelState]) => {
-        if (!mounted) return;
-        if (info.status === "fulfilled") setAppInfo(info.value);
-        if (state.status === "fulfilled") setLifecycle(state.value);
-        if (remoteState.status === "fulfilled") setRemote(remoteState.value);
-        if (tunnelState.status === "fulfilled") setTunnel(tunnelState.value);
-      },
-    );
     void import("@tauri-apps/plugin-autostart")
       .then(async ({ isEnabled }) => {
         const enabled = await isEnabled();
@@ -94,35 +84,34 @@ export function SettingsPage() {
     return () => {
       mounted = false;
     };
-  }, [coreStatus]);
+  }, []);
 
-  if (!config || !draft) {
-    return coreStatus === "online" ? (
-      <LoadingState label="Waiting for persisted settings from the local core…" />
-    ) : (
-      <>
-        <PageHeader
-          eyebrow="Client and core preferences"
-          title="Settings"
-          description="Persisted settings come from the local core."
-        />
-        <EmptyState
-          title="Settings unavailable"
-          description="Start the local core to load persisted preferences. The browser will retry without creating defaults."
-        />
-      </>
+  useEffect(() => {
+    if (coreStatus !== "online") return;
+    let mounted = true;
+    void Promise.allSettled([api.appInfo(), api.lifecycle(), api.remoteStatus(), api.tunnelStatus()]).then(
+      ([info, state, remoteState, tunnelState]) => {
+        if (!mounted) return;
+        if (info.status === "fulfilled") setAppInfo(info.value);
+        if (state.status === "fulfilled") setLifecycle(state.value);
+        if (remoteState.status === "fulfilled") setRemote(remoteState.value);
+        if (tunnelState.status === "fulfilled") setTunnel(tunnelState.value);
+      },
     );
-  }
-  const currentDraft = draft;
+    return () => {
+      mounted = false;
+    };
+  }, [coreStatus]);
 
   async function save() {
     setSaving(true);
     setMessage(null);
     setError(null);
     try {
+      if (!draft) throw new Error("Core settings are unavailable.");
       const saved = await updateConfig({
-        theme: currentDraft.theme,
-        mic_button: currentDraft.mic_button,
+        theme: draft.theme,
+        mic_button: draft.mic_button,
       });
       setDraft({ theme: saved.theme, mic_button: saved.mic_button });
       setMessage("Settings saved.");
@@ -296,7 +285,8 @@ export function SettingsPage() {
       />
       {coreStatus !== "online" && (
         <Notice tone="warning" title="Core unavailable">
-          Settings are read-only until the local Python core responds.
+          Core-backed preferences are unavailable, but desktop recovery controls and signed updates remain
+          available.
         </Notice>
       )}
       {message && (
@@ -307,36 +297,59 @@ export function SettingsPage() {
       )}
       <ErrorText error={error} />
       <div className="stack">
-        <Card>
-          <div className="card-header">
-            <div>
-              <h2>Appearance</h2>
-              <p>
-                The existing persisted theme remains authoritative. Dark is the P1 default only when no saved
-                value exists.
-              </p>
+        {draft ? (
+          <Card>
+            <div className="card-header">
+              <div>
+                <h2>Appearance</h2>
+                <p>
+                  The existing persisted theme remains authoritative. Dark is the P1 default only when no
+                  saved value exists.
+                </p>
+              </div>
+              <Palette size={18} color="var(--accent)" />
             </div>
-            <Palette size={18} color="var(--accent)" />
-          </div>
-          <Field label="Theme" help="Liquid Glass remains available when it is present in the core contract.">
-            <Select
-              aria-label="Theme"
-              value={currentDraft.theme}
-              disabled={coreStatus !== "online" || saving}
-              onChange={(event) =>
-                setDraft((current) =>
-                  current ? { ...current, theme: event.target.value as Config["theme"] } : current,
-                )
-              }
+            <Field
+              label="Theme"
+              help="Liquid Glass remains available when it is present in the core contract."
             >
-              {themes.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </Select>
-          </Field>
-        </Card>
+              <Select
+                aria-label="Theme"
+                value={draft.theme}
+                disabled={coreStatus !== "online" || saving}
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current ? { ...current, theme: event.target.value as Config["theme"] } : current,
+                  )
+                }
+              >
+                {themes.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </Card>
+        ) : (
+          <Card>
+            <div className="card-header">
+              <div>
+                <h2>Core preferences</h2>
+                <p>Theme and controller-button preferences are persisted by the local core.</p>
+              </div>
+              <Palette size={18} color="var(--accent)" />
+            </div>
+            {coreStatus === "online" ? (
+              <LoadingState label="Waiting for persisted settings from the local core…" />
+            ) : (
+              <EmptyState
+                title="Core preferences unavailable"
+                description="Desktop recovery, startup and signed update controls remain available below."
+              />
+            )}
+          </Card>
+        )}
         <Card>
           <div className="card-header">
             <div>
@@ -364,7 +377,7 @@ export function SettingsPage() {
           </dl>
           <div className="form-actions">
             <span className="muted">Restart releases controller outputs before starting the core again.</span>
-            <Button variant="quiet" onClick={() => void restartCore()} disabled={coreStatus !== "online"}>
+            <Button variant="quiet" onClick={() => void restartCore()}>
               <RefreshCw size={15} /> Restart core
             </Button>
           </div>
@@ -386,7 +399,7 @@ export function SettingsPage() {
               aria-label="Launch at Windows sign-in"
               type="checkbox"
               checked={autostart}
-              disabled={!autostartSupported || coreStatus !== "online"}
+              disabled={!autostartSupported}
               onChange={(event) => void toggleAutostart(event.target.checked)}
             />
             <span className="toggle-control" aria-hidden="true">
@@ -412,7 +425,7 @@ export function SettingsPage() {
           </div>
           <div className="form-actions">
             <span className="muted">Windows installer updates use passive progress feedback.</span>
-            <Button onClick={() => void checkForUpdate()} disabled={updateBusy || coreStatus !== "online"}>
+            <Button onClick={() => void checkForUpdate()} disabled={updateBusy}>
               <Download size={15} /> {updateBusy ? "Checking…" : "Check for updates"}
             </Button>
           </div>
@@ -529,13 +542,21 @@ export function SettingsPage() {
               />
             </Field>
             <div className="button-group">
-              <Button variant="quiet" onClick={() => void configureTunnel()} disabled={tunnelBusy}>
+              <Button
+                variant="quiet"
+                onClick={() => void configureTunnel()}
+                disabled={tunnelBusy || coreStatus !== "online"}
+              >
                 Validate tunnel config
               </Button>
               <Button onClick={() => void startTunnel()} disabled={tunnelBusy || !remote?.enabled}>
                 Start tunnel
               </Button>
-              <Button variant="danger" onClick={() => void stopTunnel()} disabled={tunnelBusy}>
+              <Button
+                variant="danger"
+                onClick={() => void stopTunnel()}
+                disabled={tunnelBusy || coreStatus !== "online"}
+              >
                 Stop tunnel
               </Button>
             </div>
@@ -563,47 +584,55 @@ export function SettingsPage() {
               <dd>Unavailable by decision; no driver is installed</dd>
             </div>
           </dl>
-          <Button variant="quiet" onClick={() => void exportSupportBundle()}>
+          <Button
+            variant="quiet"
+            onClick={() => void exportSupportBundle()}
+            disabled={coreStatus !== "online"}
+          >
             <Download size={15} /> Export Support Bundle
           </Button>
         </Card>
-        <Card>
-          <div className="card-header">
-            <div>
-              <h2>Microphone button behavior</h2>
-              <p>These labels map directly to the current `master`, `rumble` and `trackpad` wire values.</p>
+        {draft && (
+          <Card>
+            <div className="card-header">
+              <div>
+                <h2>Microphone button behavior</h2>
+                <p>These labels map directly to the current `master`, `rumble` and `trackpad` wire values.</p>
+              </div>
+              <MonitorCog size={18} color="var(--violet)" />
             </div>
-            <MonitorCog size={18} color="var(--violet)" />
-          </div>
-          <Field
-            label="Button action"
-            help={micBehaviors.find((item) => item.value === currentDraft.mic_button)?.help}
-          >
-            <Select
-              aria-label="Microphone button behavior"
-              value={currentDraft.mic_button}
-              disabled={coreStatus !== "online" || saving}
-              onChange={(event) =>
-                setDraft((current) =>
-                  current ? { ...current, mic_button: event.target.value as Config["mic_button"] } : current,
-                )
-              }
+            <Field
+              label="Button action"
+              help={micBehaviors.find((item) => item.value === draft.mic_button)?.help}
             >
-              {micBehaviors.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <div className="form-actions">
-            <span className="muted">{dirty ? "Unsaved settings" : "Settings are up to date."}</span>
-            <Button onClick={() => void save()} disabled={!dirty || saving || coreStatus !== "online"}>
-              <Save size={15} />
-              {saving ? "Saving…" : "Save settings"}
-            </Button>
-          </div>
-        </Card>
+              <Select
+                aria-label="Microphone button behavior"
+                value={draft.mic_button}
+                disabled={coreStatus !== "online" || saving}
+                onChange={(event) =>
+                  setDraft((current) =>
+                    current
+                      ? { ...current, mic_button: event.target.value as Config["mic_button"] }
+                      : current,
+                  )
+                }
+              >
+                {micBehaviors.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <div className="form-actions">
+              <span className="muted">{dirty ? "Unsaved settings" : "Settings are up to date."}</span>
+              <Button onClick={() => void save()} disabled={!dirty || saving || coreStatus !== "online"}>
+                <Save size={15} />
+                {saving ? "Saving…" : "Save settings"}
+              </Button>
+            </div>
+          </Card>
+        )}
         <Card>
           <div className="card-header">
             <div>
@@ -622,9 +651,7 @@ export function SettingsPage() {
             </div>
             <div className="data-item">
               <dt>Core start</dt>
-              <dd>
-                <code>python source/run.py --headless</code>
-              </dd>
+              <dd>Installed desktop shell manages the packaged core automatically.</dd>
             </div>
           </dl>
         </Card>
