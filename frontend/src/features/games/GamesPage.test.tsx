@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { I18nProvider, LOCALE_STORAGE_KEY, useI18n } from "../../lib/i18n";
 import { GamesPage } from "./GamesPage";
 
 const apiMock = vi.hoisted(() => ({
@@ -8,6 +9,11 @@ const apiMock = vi.hoisted(() => ({
   mappings: vi.fn(),
   chords: vi.fn(),
   conflictDiagnostics: vi.fn(),
+  gameCandidates: vi.fn(),
+  exclusiveCapabilities: vi.fn(),
+  exclusiveStatus: vi.fn(),
+  enableExclusive: vi.fn(),
+  disableExclusive: vi.fn(),
   addGame: vi.fn(),
   updateGame: vi.fn(),
   deleteGame: vi.fn(),
@@ -29,6 +35,7 @@ vi.mock("../../lib/runtime/RuntimeProvider", () => ({
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  localStorage.clear();
 });
 
 const game = {
@@ -40,6 +47,60 @@ const game = {
   compatibility_mode: "native" as const,
   enabled: true,
 };
+
+function exclusiveCapability(overrides: Record<string, unknown> = {}) {
+  return {
+    provider_available: true,
+    provider_installed: true,
+    virtual_output_reports: true,
+    physical_suppression_available: true,
+    physical_suppression_verified: true,
+    provenance: {
+      provider: "fixture-provider",
+      version: "1",
+      executable: null,
+      sha256: null,
+      signature_verified: true,
+      provenance_verified: true,
+      integrity_verified: true,
+      windows_validated: true,
+      evidence: [],
+    },
+    reason: "Verified provider and suppression are available.",
+    ...overrides,
+  };
+}
+
+function exclusiveStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    mode: "off" as const,
+    enabled: false,
+    generation: 0,
+    ownership_acquired: false,
+    heartbeat_at: 0,
+    heartbeat_timeout_ms: 1500,
+    stale: false,
+    physical_input_visible: true,
+    virtual_input_active: false,
+    physical_suppression_active: false,
+    double_input_risk: true,
+    capability: exclusiveCapability(),
+    reason: null,
+    last_error: null,
+    mirrored_sequence: 0,
+    updated_at: 0,
+    ...overrides,
+  };
+}
+
+function LocaleSwitch() {
+  const { setLocale } = useI18n();
+  return (
+    <button type="button" onClick={() => setLocale("pt-BR")}>
+      Switch locale
+    </button>
+  );
+}
 
 function makeRuntime() {
   return {
@@ -116,6 +177,9 @@ function setupApi() {
   apiMock.mappings.mockResolvedValue({ mappings: [] });
   apiMock.chords.mockResolvedValue({ chords: [] });
   apiMock.conflictDiagnostics.mockResolvedValue({ conflicts: [] });
+  apiMock.gameCandidates.mockResolvedValue([]);
+  apiMock.exclusiveCapabilities.mockResolvedValue(exclusiveCapability());
+  apiMock.exclusiveStatus.mockResolvedValue(exclusiveStatus());
   apiMock.updateAutomation.mockResolvedValue(makeRuntime().automation);
   apiMock.updateCompatibility.mockResolvedValue(makeRuntime().compatibility);
   apiMock.testGameMatch.mockResolvedValue({
@@ -248,5 +312,85 @@ describe("GamesPage", () => {
     expect(await screen.findByText("Local core offline", { exact: true })).toBeVisible();
     expect(screen.getByLabelText("Game automation")).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Input mode" })).toBeDisabled();
+  });
+
+  it("lists running/recent candidates and applies one as an explicit draft", async () => {
+    setupApi();
+    apiMock.gameCandidates.mockResolvedValue([
+      {
+        executable_name: "candidate.exe",
+        executable_path: "C:\\Games\\candidate.exe",
+        pid: 99,
+        title: "Candidate Game",
+        source: "running",
+        observed_at: 100,
+      },
+    ]);
+    model.value = {
+      runtime: makeRuntime(),
+      coreStatus: "online",
+      stale: false,
+      loading: false,
+    };
+
+    render(<GamesPage />);
+
+    expect(await screen.findByText("Candidate Game")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Use candidate" }));
+    expect(screen.getByLabelText("Executables")).toHaveValue("candidate.exe");
+    expect(screen.getByLabelText("Optional full path")).toHaveValue("C:\\Games\\candidate.exe");
+  });
+
+  it("switches primary and advanced Games copy live through the global locale store", async () => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, "en-US");
+    setupApi();
+    model.value = {
+      runtime: makeRuntime(),
+      coreStatus: "online",
+      stale: false,
+      loading: false,
+    };
+
+    render(
+      <I18nProvider>
+        <LocaleSwitch />
+        <GamesPage />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Games" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Mappings" })).toBeVisible();
+    expect(screen.getByText("Advanced · Mappings and chords")).toBeInTheDocument();
+    expect(screen.getByLabelText("Game automation")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch locale" }));
+
+    expect(await screen.findByRole("heading", { name: "Jogos" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Mapeamentos" })).toBeVisible();
+    expect(screen.getByText("Avançado · Mapeamentos e acordes")).toBeInTheDocument();
+    expect(screen.getByLabelText("Automação de jogos")).toBeInTheDocument();
+    expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe("pt-BR");
+  });
+
+  it("keeps the Exclusive toggle actionable only when the complete capability is operational", async () => {
+    setupApi();
+    apiMock.exclusiveCapabilities.mockResolvedValue(
+      exclusiveCapability({ physical_suppression_verified: false }),
+    );
+    model.value = {
+      runtime: makeRuntime(),
+      coreStatus: "online",
+      stale: false,
+      loading: false,
+    };
+    const { unmount } = render(<GamesPage />);
+
+    await waitFor(() => expect(apiMock.exclusiveCapabilities).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByLabelText("Exclusive input mode")).toBeDisabled());
+    unmount();
+
+    apiMock.exclusiveCapabilities.mockResolvedValue(exclusiveCapability());
+    render(<GamesPage />);
+    await waitFor(() => expect(screen.getByLabelText("Exclusive input mode")).toBeEnabled());
   });
 });

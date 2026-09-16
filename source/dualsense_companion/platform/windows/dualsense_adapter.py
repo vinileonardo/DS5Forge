@@ -21,6 +21,7 @@ from ...domain.models import (
     ControllerIdentity,
     ControllerReading,
     LightbarState,
+    PlayerLedState,
     TriggerMode,
     TriggerState,
     normalize_controller_input,
@@ -42,9 +43,9 @@ class PyDualSenseFactory:
             except ImportError:
                 TriggerModes = None
             try:
-                from pydualsense import Brightness, LedOptions, PulseOptions  # type: ignore[import-not-found]
+                from pydualsense import Brightness, LedOptions, PlayerID, PulseOptions  # type: ignore[import-not-found]
             except ImportError:
-                Brightness = LedOptions = PulseOptions = None
+                Brightness = LedOptions = PlayerID = PulseOptions = None
         except ImportError as exc:
             raise PlatformUnavailableError(
                 "The pydualsense USB dependency is not installed.",
@@ -69,6 +70,7 @@ class PyDualSenseFactory:
             trigger_modes=TriggerModes,
             brightness=Brightness,
             led_options=LedOptions,
+            player_ids=PlayerID,
             pulse_options=PulseOptions,
         )
 
@@ -81,14 +83,21 @@ class PyDualSenseAdapter:
         trigger_modes: Any = None,
         brightness: Any = None,
         led_options: Any = None,
+        player_ids: Any = None,
         pulse_options: Any = None,
     ) -> None:
         self.raw = raw
         self._trigger_modes = trigger_modes
         self._brightness = brightness
         self._led_options = led_options
+        self._player_ids = player_ids
         self._pulse_options = pulse_options
         self._lightbar_state = LightbarState()
+        self._player_led_state = PlayerLedState()
+        light = getattr(raw, "light", None)
+        self._player_led_pattern = getattr(light, "playerNumber", None)
+        if self._player_led_pattern is None and player_ids is not None:
+            self._player_led_pattern = getattr(player_ids, "PLAYER_1", None)
         self._trigger_state = TriggerState()
         self.identity = ControllerIdentity(
             model=str(getattr(raw, "model", "DualSense")),
@@ -97,7 +106,6 @@ class PyDualSenseAdapter:
             product_id=_optional_int(getattr(raw, "product_id", None)),
             transport="usb",
         )
-        light = getattr(raw, "light", None)
         trigger_left = getattr(raw, "triggerL", None)
         trigger_right = getattr(raw, "triggerR", None)
         touch_state = getattr(raw, "state", None)
@@ -124,6 +132,10 @@ class PyDualSenseAdapter:
                 _trigger_surface_available(trigger_left, trigger_right, trigger_modes),
                 "The installed adapter does not expose typed adaptive-trigger controls.",
             ),
+            "adaptive_trigger_output_reports": _availability(
+                callable(getattr(raw, "prepareReport", None)) and callable(getattr(raw, "writeReport", None)),
+                "The pinned adapter exposes trigger setters but no proven output-report passthrough.",
+            ),
         }
         self.capabilities = ControllerCapabilities(
             usb=True,
@@ -132,6 +144,7 @@ class PyDualSenseAdapter:
             microphone_button=availability["microphone_button"].enabled,
             lightbar=availability["lightbar"].enabled,
             adaptive_triggers=availability["adaptive_triggers"].enabled,
+            adaptive_trigger_output_reports=availability["adaptive_trigger_output_reports"].enabled,
             availability=availability,
         )
 
@@ -186,25 +199,19 @@ class PyDualSenseAdapter:
             self.reset_triggers()
         except DS5ForgeError:
             LOGGER.exception("trigger neutralization failed", extra={"event": "controller.trigger_neutralize"})
+        try:
+            self.reset_player_leds()
+        except DS5ForgeError:
+            LOGGER.exception("Player LED neutralization failed", extra={"event": "controller.player_led_neutralize"})
 
     def get_lightbar(self) -> LightbarState:
         capability = self.capabilities.capability("lightbar")
         if not capability.enabled:
             raise CapabilityUnavailableError("lightbar", capability.reason)
-        light = getattr(self.raw, "light", None)
-        color = getattr(light, "TouchpadColor", None)
-        if isinstance(color, (tuple, list)) and len(color) == 3:
-            try:
-                return LightbarState(
-                    r=int(color[0]),
-                    g=int(color[1]),
-                    b=int(color[2]),
-                    enabled=_light_enabled(getattr(light, "ledOption", None), self._led_options),
-                    brightness=_light_brightness(getattr(light, "brightness", None), self._brightness),
-                    pulse=_light_pulse(getattr(light, "pulseOptions", None), self._pulse_options),
-                )
-            except (TypeError, ValueError):
-                LOGGER.warning("controller lightbar state was malformed", extra={"event": "controller.lightbar_read"})
+        # pydualsense exposes one shared LED update mask.  Reading that mask
+        # cannot tell whether DS5Forge intentionally disabled only the RGB
+        # strip or only the player LEDs, so the adapter's last successfully
+        # applied command is the authoritative state.
         return self._lightbar_state
 
     def set_lightbar(self, state: LightbarState) -> None:
@@ -212,12 +219,7 @@ class PyDualSenseAdapter:
         if not capability.enabled:
             raise CapabilityUnavailableError("lightbar", capability.reason)
         try:
-            light = self.raw.light
-            light.setColorI(state.r, state.g, state.b)
-            if not state.enabled or (callable(getattr(light, "setLEDOption", None)) and self._led_options is not None):
-                _set_light_option(light, self._led_options, "Both" if state.enabled else "Off")
-            _set_light_brightness(light, self._brightness, state.brightness)
-            _set_light_pulse(light, self._pulse_options, state.pulse)
+            self._apply_lighting_state(state, self._player_led_state)
             self._lightbar_state = state
         except DS5ForgeError:
             raise
@@ -230,6 +232,72 @@ class PyDualSenseAdapter:
 
     def reset_lightbar(self) -> None:
         self.set_lightbar(LightbarState())
+
+    def get_player_leds(self) -> PlayerLedState:
+        return self._player_led_state
+
+    def set_player_leds(self, state: PlayerLedState) -> None:
+        try:
+            self._apply_lighting_state(self._lightbar_state, state)
+            self._player_led_state = state
+        except DS5ForgeError:
+            raise
+        except Exception as exc:
+            raise DS5ForgeError(
+                ErrorCode.LIGHTBAR_OUTPUT_FAILED,
+                "Player LED output failed.",
+                detail=str(exc),
+            ) from exc
+
+    def reset_player_leds(self) -> None:
+        self.set_player_leds(PlayerLedState())
+
+    def _apply_lighting_state(self, lightbar: LightbarState, player_leds: PlayerLedState) -> None:
+        """Apply RGB + player LEDs as one pydualsense lighting transaction.
+
+        ``LedOptions`` is a validity bitmask, not independent on/off state for
+        the two surfaces.  Always reconciling both fields with ``Both`` avoids
+        a later RGB write re-enabling player LEDs (or a player-LED write
+        suppressing the RGB strip).  Actual on/off state is represented by
+        zero RGB and a zero PlayerID pattern respectively.
+        """
+
+        light = self.raw.light
+        light.setColorI(*lightbar.scaled_rgb)
+        _set_light_pulse(light, self._pulse_options, lightbar.pulse)
+
+        brightness = 0 if player_leds.intensity >= 0.75 else 1 if player_leds.intensity >= 0.35 else 2
+        _set_light_brightness(light, self._brightness, brightness)
+        self._set_player_led_enabled(light, player_leds.enabled)
+
+        # pydualsense 0.7.x uses this mask to say which LED fields in the
+        # output report are valid.  ``Off`` means no LED-field update, so it
+        # must not be used to represent a desired disabled state.
+        _set_light_option(light, self._led_options, "Both")
+
+    def _set_player_led_enabled(self, light: Any, enabled: bool) -> None:
+        setter = getattr(light, "setPlayerID", None)
+        enum_type = self._player_ids
+        if not callable(setter) or enum_type is None:
+            if enabled:
+                return
+            raise CapabilityUnavailableError(
+                "lightbar", "The installed adapter does not expose Player LED enable control."
+            )
+        if enabled:
+            pattern = self._player_led_pattern or getattr(enum_type, "PLAYER_1", None)
+            if pattern is None:
+                raise CapabilityUnavailableError(
+                    "lightbar", "The installed adapter does not expose a Player LED pattern."
+                )
+            setter(pattern)
+            return
+        try:
+            setter(enum_type(0))
+        except (TypeError, ValueError) as exc:
+            raise CapabilityUnavailableError(
+                "lightbar", "The installed adapter cannot represent disabled Player LEDs."
+            ) from exc
 
     def set_triggers(self, state: TriggerState) -> None:
         capability = self.capabilities.capability("adaptive_triggers")
@@ -396,6 +464,8 @@ def _pulse_mode(modes: Any) -> Any:
 def _set_light_option(light: Any, enum_type: Any, name: str) -> None:
     setter = getattr(light, "setLEDOption", None)
     option = getattr(enum_type, name, None) if enum_type is not None else None
+    if option is None and name == "Player" and enum_type is not None:
+        option = getattr(enum_type, "Player", getattr(enum_type, "PlayerOnly", None))
     if not callable(setter) or option is None:
         raise CapabilityUnavailableError("lightbar", "The installed adapter does not expose LED enable control.")
     setter(option)

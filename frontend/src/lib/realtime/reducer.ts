@@ -63,6 +63,9 @@ export function applyRuntimeEvent(projection: RuntimeProjection, event: RuntimeE
       if (event.payload.kind === "lightbar.applied" || event.payload.kind === "lightbar.reset") {
         return { ...projection, runtime: { ...projection.runtime, lightbar: event.payload.state } };
       }
+      if (event.payload.kind === "player_leds.applied" || event.payload.kind === "player_leds.reset") {
+        return { ...projection, runtime: { ...projection.runtime, player_leds: event.payload.player_leds } };
+      }
       if (
         event.payload.kind === "triggers.applied" ||
         event.payload.kind === "triggers.reset" ||
@@ -179,6 +182,18 @@ export function applyRuntimeEvent(projection: RuntimeProjection, event: RuntimeE
       };
     case "synthetic.release":
       return projection;
+    case "exclusive.changed":
+    case "exclusive.recovered":
+      return {
+        ...projection,
+        runtime: projection.runtime
+          ? { ...projection.runtime, exclusive: event.payload.exclusive }
+          : projection.runtime,
+      };
+    case "diagnostics.duplicate_input":
+      return projection;
+    case "adaptive_trigger.changed":
+      return projection;
     case "profile.changed":
     case "diagnostic":
       return projection;
@@ -249,6 +264,14 @@ function eventSummary(event: RuntimeEvent): string {
       return "Game automation changed";
     case "synthetic.release":
       return "Synthetic outputs released";
+    case "exclusive.changed":
+      return `Exclusive input: ${event.payload.exclusive.mode}`;
+    case "exclusive.recovered":
+      return "Exclusive input stale state recovered";
+    case "diagnostics.duplicate_input":
+      return `Duplicate-input risk: ${event.payload.diagnostic.severity}`;
+    case "adaptive_trigger.changed":
+      return "Adaptive trigger source changed";
   }
 }
 

@@ -429,6 +429,21 @@ fn stop_core(app: AppHandle) -> Result<LifecycleSnapshot, String> {
     lifecycle(app.state::<CoreSupervisor>())
 }
 
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn pick_executable() -> Option<String> {
+    rfd::FileDialog::new()
+        .add_filter("Windows executable", &["exe"])
+        .pick_file()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn pick_executable() -> Option<String> {
+    None
+}
+
 fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open", true, None::<&str>)?;
     let status = MenuItem::with_id(app, "status", "Core status", false, None::<&str>)?;
@@ -492,7 +507,12 @@ pub fn run() {
     }
     builder
         .manage(CoreSupervisor::default())
-        .invoke_handler(tauri::generate_handler![lifecycle, start_core, stop_core])
+        .invoke_handler(tauri::generate_handler![
+            lifecycle,
+            start_core,
+            stop_core,
+            pick_executable
+        ])
         .setup(|app| {
             if let Err(error) = setup_tray(app) {
                 eprintln!("DS5Forge tray unavailable: {error}");

@@ -1,4 +1,4 @@
-# DS5Forge architecture — P0 foundation + P1 clients + P2 Lab + P3 Games
+# DS5Forge architecture — P0 foundation through P5 stabilization
 
 P0 keeps the upstream USB behavior while making the local core the only owner
 of controller hardware. The legacy GUI and the local API are clients of the
@@ -13,7 +13,9 @@ headless/API client ─┘       │
                              └─ TouchpadService ─ gesture interpreter ─ SendInput adapter
                              ├─ ForegroundWorker ─ ForegroundDetector ─ Win32 adapter
                              ├─ GameRegistryRepository ─ games.json
-                             └─ RemappingEngine ─ OutputManager ─ keyboard/mouse adapters
+                             ├─ RemappingEngine ─ OutputManager ─ keyboard/mouse adapters
+                             ├─ ExclusiveCoordinator ─ fixed Windows helper boundary
+                             └─ AdaptiveTriggerEngine ─ native/telemetry/reactive arbitration
 
 Browser Vite SPA ────────────┘
        │ HTTP + WebSocket (validated v1 contracts)
@@ -41,6 +43,12 @@ bundle a Python sidecar, open a remote endpoint, or implement installer/tray/
 updater/autostart behavior. During P1 development the core is started
 separately with `python source/run.py --headless`.
 
+P5 keeps the same authority boundary. The fixed Tauri sidecar is a desktop
+process supervisor and native `.exe` picker only; the Python core remains the
+sole owner of `pydualsense`, WASAPI, Windows HID and synthetic output state.
+Exclusive providers are capability-gated Windows adapters behind a restricted
+helper protocol. The UI never imports HIDMaestro, HidHide or a Windows API.
+
 ## Boundaries
 
 - `domain/` contains frozen snapshots, complete normalized input/telemetry,
@@ -56,6 +64,10 @@ separately with `python source/run.py --headless`.
   the Windows composition root that injects those adapters into `CoreFacade`;
   the core never imports a platform implementation. Imports are lazy so Linux/CI can run
   domain and core tests without hardware.
+- `platform/windows/exclusive_provider.py` is a fixed helper boundary. It does
+  not install a provider, download an executable, invoke `pythonnet` or run an
+  arbitrary shell command. Provenance, signature, hash and Windows validation
+  are explicit capability inputs.
 - `api/` is a presentation adapter. The default server bind is `127.0.0.1`;
   browser HTTP requests with an explicit unapproved `Origin` are rejected
   before reaching the facade, CORS is limited to the same Vite/Tauri
@@ -73,6 +85,21 @@ separately with `python source/run.py --headless`.
   production adapter exists. Chord candidates delay simple mappings until all
   overlapping chord windows expire, completed chords win, and every teardown
   path attempts release across all adapters.
+- `ExclusiveCoordinator` owns virtual output/suppression ordering, ownership
+  token, generation, heartbeat and stale recovery. A successful mirror refreshes
+  the core lease; a bounded monitor thread sends the provider heartbeat at a
+  throttled rate and expires the session when the lease goes stale, independent
+  of the controller read callback. Virtualization or physical suppression
+  failure rolls back the whole transaction; missing suppression keeps
+  `double_input_risk=true`. Exclusive refuses to coexist with Remap/Virtual and
+  a mode change disables it first.
+- `AdaptiveTriggerEngine` is separate from Controller Lab previews. It
+  arbitrates `game_native`, `telemetry`, `reactive` and `off` with TTL and
+  reset/watchdog ownership. Reactive effects are labeled generated effects and
+  are only produced when a game explicitly selects `reactive`; `native` is the
+  default and `off` neutralizes DS5Forge output. `game_native` is reserved for
+  real virtual-provider output-report feedback, which is not implemented in this
+  source, so no invented telemetry is injected at that priority.
 
 ## Lifecycle and teardown
 
@@ -119,14 +146,16 @@ exit policy is `restore_previous`; Native is the default mode and
 Virtual requires a provider with physical suppression. In this sprint no
 production virtual provider, driver or installer is present.
 
-## P2/P3 safety boundaries
+## P2/P3/P5 safety boundaries
 
 - Trigger previews are single-flight and server-TTL-bound; every terminal path
   attempts both-trigger Off reset.
 - Haptics test runs are single-flight and bounded; motors are neutralized before
   audio-driven rumble restarts.
-- Stick calibration/deadzone is metadata for DS5Forge visualization/profile
-  behavior only and never rewrites native game input.
+- Stick calibration/deadzone is applied only to DS5Forge Exclusive virtual
+  mirroring and to visualization/profile metadata. Native game input and the
+  authoritative raw telemetry are never rewritten. Remap remains a
+  digital keyboard/mouse mapper; there is no remap analog-deadzone path.
 - Browser profile import is text-only and size-limited; malformed, oversized,
   incompatible or unconfirmed-overwrite imports leave current state unchanged.
 - Game registry updates are all-or-nothing. Mapping/chord ownership is scoped
@@ -134,14 +163,26 @@ production virtual provider, driver or installer is present.
   current context until a real foreground transition.
 - Process conflict diagnostics are best effort and non-controlling. Steam is
   reported only as a possible configuration-dependent conflict.
+- Lightbar RGB intensity is scaled in software and does not reuse Player LED
+  brightness. Pulse workers are interruptible and joined during teardown.
+- Touch normalization preserves both adapter touch slots, contact IDs and
+  bounded raw values for diagnostics. Radial deadzone is applied only for
+  remapping/Exclusive behavior; Native values stay raw.
 
-## Explicit P0/P2/P3 exclusions
+## Explicit P0/P2/P3/P5 exclusions
 
 P0–P4 are USB/wired only. There is no Bluetooth, wireless transport/pairing,
 tunnel, installer, updater or new Tauri permission in P3. Virtual/XInput is
 modeled but unavailable in production because no approved provider with safe
 physical suppression is installed. Windows and physical DualSense USB proof
 remain `HARDWARE VALIDATION PENDING`.
+
+P5 does not add Bluetooth, wireless pairing, dongles, ViGEmBus or provider
+installation. HIDMaestro + HidHide is an investigated integration design, not
+an enabled runtime capability. Exclusive starts OFF and remains unavailable
+until provenance, integrity, signature, output reports, session suppression and
+Windows validation are all proven. See
+[`ADR_P5_EXCLUSIVE_INPUT_PROVIDER.md`](ADR_P5_EXCLUSIVE_INPUT_PROVIDER.md).
 
 ## P4 productization boundary
 
@@ -158,3 +199,7 @@ autostart, updater and tray. The bundle target is per-user NSIS. The only
 external process path is the packaged headless core with fixed loopback
 arguments. Remote Access and cloudflared are disabled until explicitly paired
 and configured; the core API never changes from loopback.
+
+P5 adds only the native executable-picker command and keeps Tauri capabilities
+least-privilege. Remote Access remains under the existing product boundary and
+is presented under Settings → Advanced without changing its security model.

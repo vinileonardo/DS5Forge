@@ -8,10 +8,13 @@ from typing import Protocol
 
 from ..domain.games import ForegroundApplication, VirtualControllerCapability
 from ..domain.models import (
+    BatterySnapshot,
     ControllerCapabilities,
     ControllerIdentity,
+    ControllerInput,
     ControllerReading,
     LightbarState,
+    PlayerLedState,
     TriggerState,
 )
 
@@ -41,6 +44,12 @@ class ControllerLabAdapter(Protocol):
     def set_lightbar(self, state: LightbarState) -> None: ...
 
     def reset_lightbar(self) -> None: ...
+
+    def get_player_leds(self) -> PlayerLedState: ...
+
+    def set_player_leds(self, state: PlayerLedState) -> None: ...
+
+    def reset_player_leds(self) -> None: ...
 
     def set_triggers(self, state: TriggerState) -> None: ...
 
@@ -87,6 +96,58 @@ class VirtualControllerProvider(Protocol):
     def release_all(self) -> None: ...
 
     def close(self) -> None: ...
+
+
+class ExclusiveVirtualCapability(Protocol):
+    """Provider probe used by the Exclusive coordinator.
+
+    The concrete Windows helper may expose a richer object; keeping the
+    protocol structural prevents the core from importing HIDMaestro/.NET.
+    """
+
+    available: bool
+    installed: bool
+    output_reports: bool
+    provenance: object
+    reason: str | None
+
+
+class PhysicalInputSuppressionProvider(Protocol):
+    """Session-scoped physical input suppression (HidHide adapter boundary)."""
+
+    def capability(self) -> object: ...
+
+    def enable(self, *, token: str, generation: int) -> None: ...
+
+    def heartbeat(self, *, token: str, generation: int) -> None: ...
+
+    def disable(self, *, token: str, generation: int) -> None: ...
+
+    def recover_stale(self) -> None: ...
+
+
+class VirtualOutputReportSource(Protocol):
+    """Full DualSense state sink used by Exclusive mirroring."""
+
+    def capability(self) -> object: ...
+
+    def start(self, *, token: str, generation: int) -> None: ...
+
+    def heartbeat(self, *, token: str, generation: int) -> None: ...
+
+    def submit_state(
+        self,
+        input_state: ControllerInput,
+        *,
+        battery: BatterySnapshot,
+        sequence: int,
+        token: str,
+        generation: int,
+    ) -> None: ...
+
+    def close(self, *, token: str, generation: int) -> None: ...
+
+    def recover_stale(self) -> None: ...
 
 
 class AudioCapture(Protocol):

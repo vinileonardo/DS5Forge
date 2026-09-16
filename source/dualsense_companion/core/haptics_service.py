@@ -28,6 +28,7 @@ class HapticsService(threading.Thread):
         reload_event: threading.Event | None = None,
         on_motors: Callable[[int, int], None] | None = None,
         on_audio: Callable[[str, str | None, str | None], None] | None = None,
+        on_envelope: Callable[[float], None] | None = None,
         on_error: Callable[[DS5ForgeError], None] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -39,6 +40,7 @@ class HapticsService(threading.Thread):
         self.reload_event = reload_event or threading.Event()
         self.on_motors = on_motors
         self.on_audio = on_audio
+        self.on_envelope = on_envelope
         self.on_error = on_error
         self.clock = clock
         self.stop_event = threading.Event()
@@ -110,6 +112,7 @@ class HapticsService(threading.Thread):
                 data = capture.read()
                 if not self.enabled_provider():
                     self._set_motors(0, 0)
+                    self._report_envelope(0.0)
                     continue
                 samples = pcm_float32(data, capture.channels)
                 low = lp.process(samples)
@@ -120,6 +123,9 @@ class HapticsService(threading.Thread):
                 elb = base_l.update(peak_low)
                 transient = max(0.0, elf - elb)
                 erf = fast_r.update(peak_mid)
+                # Expose the real runtime audio envelope for the explicit
+                # DS5Forge-generated reactive trigger path only.
+                self._report_envelope(min(1.0, max(elf, erf)))
                 # Mapping-only parameters remain live without rebuilding the
                 # WASAPI stream/filter state, matching the upstream behavior.
                 mapping_config = self.config_provider()
@@ -127,6 +133,11 @@ class HapticsService(threading.Thread):
                 right = map_rumble_level(erf, transient * 0.5, mapping_config, texture=True)
                 self._set_motors(left, right)
         self._set_motors(0, 0)
+        self._report_envelope(0.0)
+
+    def _report_envelope(self, level: float) -> None:
+        if self.on_envelope is not None:
+            self.on_envelope(max(0.0, min(1.0, float(level))))
 
     def _set_motors(self, left: int, right: int) -> None:
         left = max(0, min(255, int(left)))

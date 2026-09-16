@@ -24,23 +24,17 @@ import {
 } from "../../components/ui";
 import type { Config } from "../../lib/api/contracts";
 import { api, API_BASE_URL } from "../../lib/api/client";
+import { useI18n } from "../../lib/i18n";
 import { useRuntime } from "../../lib/runtime/RuntimeProvider";
 
 const themes: Config["theme"][] = ["Dark", "Light", "Liquid Glass"];
-const micBehaviors: Array<{ value: Config["mic_button"]; label: string; help: string }> = [
-  { value: "master", label: "Master behavior", help: "Toggle the master behavior defined by the core." },
-  { value: "rumble", label: "Haptics", help: "Toggle audio-driven rumble from the controller button." },
-  {
-    value: "trackpad",
-    label: "Touchpad",
-    help: "Toggle touchpad mouse behavior from the controller button.",
-  },
-];
+const micBehaviors: Config["mic_button"][] = ["master", "rumble", "trackpad"];
 
 type SettingsDraft = Pick<Config, "theme" | "mic_button">;
 
 export function SettingsPage() {
   const { config, coreStatus, updateConfig } = useRuntime();
+  const { locale, setLocale, t } = useI18n();
   const [draft, setDraft] = useState<SettingsDraft | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -60,11 +54,29 @@ export function SettingsPage() {
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateReady, setUpdateReady] = useState(false);
   const [restartBusy, setRestartBusy] = useState(false);
-  const [restartStatus, setRestartStatus] = useState("Restarting local core…");
+  const [restartStatus, setRestartStatus] = useState(() => t("settings.restartingStatus"));
 
   const dirty = Boolean(
     config && draft && (config.theme !== draft.theme || config.mic_button !== draft.mic_button),
   );
+
+  function themeLabel(theme: Config["theme"]): string {
+    if (theme === "Dark") return t("settings.themeDark");
+    if (theme === "Light") return t("settings.themeLight");
+    return t("settings.themeLiquidGlass");
+  }
+
+  function micLabel(value: Config["mic_button"]): string {
+    if (value === "master") return t("settings.micMasterLabel");
+    if (value === "rumble") return t("settings.micRumbleLabel");
+    return t("settings.micTrackpadLabel");
+  }
+
+  function micHelp(value: Config["mic_button"]): string {
+    if (value === "master") return t("settings.micMasterHelp");
+    if (value === "rumble") return t("settings.micRumbleHelp");
+    return t("settings.micTrackpadHelp");
+  }
 
   useEffect(() => {
     if (config && !dirty) setDraft({ theme: config.theme, mic_button: config.mic_button });
@@ -110,13 +122,13 @@ export function SettingsPage() {
     setMessage(null);
     setError(null);
     try {
-      if (!draft) throw new Error("Core settings are unavailable.");
+      if (!draft) throw new Error(t("settings.coreSettingsUnavailable"));
       const saved = await updateConfig({
         theme: draft.theme,
         mic_button: draft.mic_button,
       });
       setDraft({ theme: saved.theme, mic_button: saved.mic_button });
-      setMessage("Settings saved.");
+      setMessage(t("settings.saved"));
     } catch (reason) {
       setError(reason);
     } finally {
@@ -131,7 +143,7 @@ export function SettingsPage() {
       if (enabled) await module.enable();
       else await module.disable();
       setAutostart(enabled);
-      setMessage(enabled ? "Autostart enabled." : "Autostart disabled.");
+      setMessage(enabled ? t("settings.autostartEnabled") : t("settings.autostartDisabled"));
     } catch (reason) {
       setError(reason);
     }
@@ -139,7 +151,7 @@ export function SettingsPage() {
 
   async function restartCore() {
     setRestartBusy(true);
-    setRestartStatus("Stopping local core safely…");
+    setRestartStatus(t("settings.stoppingCore"));
     setMessage(null);
     setError(null);
     try {
@@ -148,30 +160,30 @@ export function SettingsPage() {
       if (isTauriShell) {
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke("stop_core");
-        setRestartStatus("Starting local core…");
+        setRestartStatus(t("settings.startingCore"));
         const snapshot = await invoke<{ state: string }>("start_core");
         setLifecycle({ state: snapshot.state, core: snapshot.state });
-        setRestartStatus("Waiting for controller services…");
+        setRestartStatus(t("settings.waitingControllerServices"));
         const deadline = Date.now() + 30_000;
         while (Date.now() < deadline) {
           const current = await invoke<{ state: string; message?: string | null }>("lifecycle");
           setLifecycle({ state: current.state, core: current.state });
           if (current.state === "application_ready" || current.state === "core_ready") break;
           if (["core_start_failed", "core_timeout", "shutdown_timeout"].includes(current.state)) {
-            throw new Error(current.message || `Core restart failed in state ${current.state}.`);
+            throw new Error(current.message || `${t("settings.restartFailedState")} ${current.state}.`);
           }
           await new Promise((resolve) => window.setTimeout(resolve, 250));
         }
         const finalState = await invoke<{ state: string; message?: string | null }>("lifecycle");
         setLifecycle({ state: finalState.state, core: finalState.state });
         if (finalState.state !== "application_ready" && finalState.state !== "core_ready") {
-          throw new Error(finalState.message || "Core did not become ready within 30 seconds.");
+          throw new Error(finalState.message || t("settings.coreReadyTimeout"));
         }
       } else {
-        setRestartStatus("Restarting local core…");
+        setRestartStatus(t("settings.restartingStatus"));
         setLifecycle(await api.restartCore());
       }
-      setMessage("Core restarted. Hardware outputs were released before the new core started.");
+      setMessage(t("settings.coreRestarted"));
     } catch (reason) {
       setError(reason);
     } finally {
@@ -196,7 +208,7 @@ export function SettingsPage() {
       setRemote(await api.disableRemote());
       setTunnel(await api.tunnelStatus());
       setPairing(null);
-      setMessage("Remote access disabled; sessions and tunnel state were closed.");
+      setMessage(t("settings.remoteDisabled"));
     } catch (reason) {
       setError(reason);
     }
@@ -207,7 +219,7 @@ export function SettingsPage() {
     setError(null);
     try {
       setTunnel(await api.configureTunnel(tunnelExecutable.trim() || null, tunnelConfigPath.trim() || null));
-      setMessage("Cloudflared configuration validated. It remains stopped until explicitly started.");
+      setMessage(t("settings.tunnelValidated"));
     } catch (reason) {
       setError(reason);
     } finally {
@@ -241,14 +253,14 @@ export function SettingsPage() {
 
   async function checkForUpdate() {
     setUpdateBusy(true);
-    setUpdateMessage(null);
+    setUpdateMessage(t("settings.checkingSignedUpdates"));
     setUpdateReady(false);
     let coreStopped = false;
     try {
       const { check } = await import("@tauri-apps/plugin-updater");
       const candidate = await check();
       if (!candidate) {
-        setUpdateMessage("No signed update is available.");
+        setUpdateMessage(t("settings.noSignedUpdate"));
         return;
       }
       const isTauriShell =
@@ -260,16 +272,20 @@ export function SettingsPage() {
       }
       let downloaded = 0;
       await candidate.downloadAndInstall((event) => {
-        if (event.event === "Started") setUpdateMessage("Downloading signed update…");
+        if (event.event === "Started") setUpdateMessage(t("settings.downloadingUpdate"));
         if (event.event === "Progress") {
           downloaded += event.data.chunkLength;
-          setUpdateMessage(`Downloading signed update… ${downloaded} bytes`);
+          setUpdateMessage(`${t("settings.downloadingUpdate")} ${downloaded} bytes`);
         }
-        if (event.event === "Finished") {
-          setUpdateReady(true);
-          setUpdateMessage("Update installed. Restart DS5Forge to apply it.");
-        }
+        if (event.event === "Finished") setUpdateMessage(t("settings.installingUpdate"));
       });
+      if (invoke) {
+        setUpdateMessage(t("settings.updateInstalledRelaunching"));
+        await (await import("@tauri-apps/plugin-process")).relaunch();
+      } else {
+        setUpdateReady(true);
+        setUpdateMessage(t("settings.updateInstalledShell"));
+      }
     } catch (reason) {
       try {
         if (coreStopped) await (await import("@tauri-apps/api/core")).invoke("start_core");
@@ -279,7 +295,7 @@ export function SettingsPage() {
       }
       // Update failure is deliberately non-destructive: the current install
       // remains usable and the user can retry or export diagnostics.
-      setUpdateMessage(reason instanceof Error ? reason.message : "Update check unavailable in this shell.");
+      setUpdateMessage(reason instanceof Error ? reason.message : t("settings.updateUnavailable"));
     } finally {
       setUpdateBusy(false);
     }
@@ -295,7 +311,7 @@ export function SettingsPage() {
       anchor.download = "ds5forge-support-bundle.zip";
       anchor.click();
       URL.revokeObjectURL(url);
-      setMessage("Support Bundle exported with secrets and sensitive paths redacted.");
+      setMessage(t("settings.supportExported"));
     } catch (reason) {
       setError(reason);
     }
@@ -308,31 +324,27 @@ export function SettingsPage() {
           className="core-restart-backdrop"
           role="status"
           aria-live="polite"
-          aria-label="Restarting local core"
+          aria-label={t("settings.restartingAria")}
         >
           <div className="core-restart-status">
             <span className="spinner core-restart-spinner" aria-hidden="true" />
             <strong>{restartStatus}</strong>
-            <span>
-              DS5Forge is releasing the current controller session and waiting for the new core to become
-              ready.
-            </span>
+            <span>{t("settings.restartOverlayBody")}</span>
           </div>
         </div>
       )}
       <PageHeader
-        eyebrow="Client and core preferences"
-        title="Settings"
-        description="Keep the existing schema-v1 preferences visible without introducing a second local configuration system."
+        eyebrow={t("settings.eyebrow")}
+        title={t("settings.title")}
+        description={t("settings.description")}
       />
       {coreStatus !== "online" && (
-        <Notice tone="warning" title="Core unavailable">
-          Core-backed preferences are unavailable, but desktop recovery controls and signed updates remain
-          available.
+        <Notice tone="warning" title={t("settings.coreUnavailableTitle")}>
+          {t("settings.coreUnavailableBody")}
         </Notice>
       )}
       {message && (
-        <Notice tone="success" title="Saved">
+        <Notice tone="success" title={t("settings.savedTitle")}>
           <Check size={14} />
           {message}
         </Notice>
@@ -343,20 +355,14 @@ export function SettingsPage() {
           <Card>
             <div className="card-header">
               <div>
-                <h2>Appearance</h2>
-                <p>
-                  The existing persisted theme remains authoritative. Dark is the P1 default only when no
-                  saved value exists.
-                </p>
+                <h2>{t("settings.appearance")}</h2>
+                <p>{t("settings.appearanceHelp")}</p>
               </div>
               <Palette size={18} color="var(--accent)" />
             </div>
-            <Field
-              label="Theme"
-              help="Liquid Glass remains available when it is present in the core contract."
-            >
+            <Field label={t("settings.theme")} help={t("settings.themeHelp")}>
               <Select
-                aria-label="Theme"
+                aria-label={t("settings.theme")}
                 value={draft.theme}
                 disabled={coreStatus !== "online" || saving}
                 onChange={(event) =>
@@ -367,9 +373,19 @@ export function SettingsPage() {
               >
                 {themes.map((item) => (
                   <option key={item} value={item}>
-                    {item}
+                    {themeLabel(item)}
                   </option>
                 ))}
+              </Select>
+            </Field>
+            <Field label={t("settings.language")} help={t("settings.languageHelp")}>
+              <Select
+                aria-label={t("settings.language")}
+                value={locale}
+                onChange={(event) => setLocale(event.target.value as "en-US" | "pt-BR")}
+              >
+                <option value="en-US">{t("settings.english")}</option>
+                <option value="pt-BR">{t("settings.portuguese")}</option>
               </Select>
             </Field>
           </Card>
@@ -377,17 +393,17 @@ export function SettingsPage() {
           <Card>
             <div className="card-header">
               <div>
-                <h2>Core preferences</h2>
-                <p>Theme and controller-button preferences are persisted by the local core.</p>
+                <h2>{t("settings.corePreferences")}</h2>
+                <p>{t("settings.corePreferencesHelp")}</p>
               </div>
               <Palette size={18} color="var(--accent)" />
             </div>
             {coreStatus === "online" ? (
-              <LoadingState label="Waiting for persisted settings from the local core…" />
+              <LoadingState label={t("settings.waitingCorePreferences")} />
             ) : (
               <EmptyState
-                title="Core preferences unavailable"
-                description="Desktop recovery, startup and signed update controls remain available below."
+                title={t("settings.corePreferencesUnavailable")}
+                description={t("settings.corePreferencesUnavailableBody")}
               />
             )}
           </Card>
@@ -395,50 +411,47 @@ export function SettingsPage() {
         <Card>
           <div className="card-header">
             <div>
-              <h2>Desktop</h2>
-              <p>
-                The Tauri shell owns the Python sidecar, tray, single-instance behavior and coordinated
-                teardown.
-              </p>
+              <h2>{t("settings.desktop")}</h2>
+              <p>{t("settings.desktopHelp")}</p>
             </div>
             <Power size={18} color="var(--accent)" />
           </div>
           <dl className="data-list">
             <div className="data-item">
-              <dt>Application version</dt>
+              <dt>{t("settings.applicationVersion")}</dt>
               <dd>{appInfo?.version ?? "—"}</dd>
             </div>
             <div className="data-item">
-              <dt>Shell platform</dt>
-              <dd>{appInfo?.platform ?? "Browser / unknown"}</dd>
+              <dt>{t("settings.shellPlatform")}</dt>
+              <dd>{appInfo?.platform ?? t("settings.browserUnknown")}</dd>
             </div>
             <div className="data-item">
-              <dt>Lifecycle</dt>
+              <dt>{t("settings.lifecycle")}</dt>
               <dd>{lifecycle?.state ?? "—"}</dd>
             </div>
           </dl>
           <div className="form-actions">
-            <span className="muted">Restart releases controller outputs before starting the core again.</span>
+            <span className="muted">{t("settings.restartHelp")}</span>
             <Button variant="quiet" onClick={() => void restartCore()} disabled={restartBusy}>
-              <RefreshCw size={15} /> {restartBusy ? "Restarting…" : "Restart core"}
+              <RefreshCw size={15} /> {restartBusy ? t("settings.restarting") : t("settings.restartCore")}
             </Button>
           </div>
         </Card>
         <Card>
           <div className="card-header">
             <div>
-              <h2>Startup</h2>
-              <p>Autostart is disabled by default and can be reversed at any time.</p>
+              <h2>{t("settings.startup")}</h2>
+              <p>{t("settings.startupHelp")}</p>
             </div>
             <Power size={18} color="var(--violet)" />
           </div>
           <label className="toggle-row">
             <span>
-              <span className="toggle-label">Launch at Windows sign-in</span>
-              <span className="toggle-description">Uses the official Tauri autostart integration.</span>
+              <span className="toggle-label">{t("settings.launchAtSignIn")}</span>
+              <span className="toggle-description">{t("settings.autostartIntegration")}</span>
             </span>
             <input
-              aria-label="Launch at Windows sign-in"
+              aria-label={t("settings.launchAtSignIn")}
               type="checkbox"
               checked={autostart}
               disabled={!autostartSupported}
@@ -448,31 +461,24 @@ export function SettingsPage() {
               <span />
             </span>
           </label>
-          {!autostartSupported && (
-            <p className="muted">
-              Available in the installed desktop shell; browser preview cannot modify Windows startup.
-            </p>
-          )}
+          {!autostartSupported && <p className="muted">{t("settings.autostartShellOnly")}</p>}
         </Card>
         <Card>
           <div className="card-header">
             <div>
-              <h2>Updates</h2>
-              <p>
-                Only HTTPS metadata with a detached Tauri signature is accepted. Failed updates leave the
-                current install intact.
-              </p>
+              <h2>{t("settings.updates")}</h2>
+              <p>{t("settings.updatesHelp")}</p>
             </div>
             <Download size={18} color="var(--success)" />
           </div>
           <div className="form-actions">
-            <span className="muted">Windows installer updates use passive progress feedback.</span>
+            <span className="muted">{t("settings.updateProgressHelp")}</span>
             <Button onClick={() => void checkForUpdate()} disabled={updateBusy}>
-              <Download size={15} /> {updateBusy ? "Checking…" : "Check for updates"}
+              <Download size={15} /> {updateBusy ? t("settings.checking") : t("settings.checkForUpdates")}
             </Button>
           </div>
           {updateMessage && (
-            <Notice tone="info" title="Updater">
+            <Notice tone="info" title={t("settings.updater")}>
               {updateMessage}
             </Notice>
           )}
@@ -485,145 +491,141 @@ export function SettingsPage() {
                   .catch((reason) => setError(reason))
               }
             >
-              Restart to apply
+              {t("settings.restartToApply")}
             </Button>
           )}
         </Card>
+        <details className="settings-advanced">
+          <summary>{t("settings.advancedRemote")}</summary>
+          <Card>
+            <div className="card-header">
+              <div>
+                <h2>{t("settings.remoteAccess")}</h2>
+                <p>{t("settings.remoteAccessHelp")}</p>
+              </div>
+              <KeyRound size={18} color="var(--warning)" />
+            </div>
+            <Field label={t("settings.registeredOrigin")} help={t("settings.registeredOriginHelp")}>
+              <input
+                className="input"
+                aria-label={t("settings.registeredOrigin")}
+                value={origin}
+                onChange={(event) => setOrigin(event.target.value)}
+                placeholder="https://remote.example"
+              />
+            </Field>
+            <div className="form-actions">
+              <span className="muted">
+                {t("settings.status")}: {remote?.status ?? t("settings.off")} · {remote?.sessions.length ?? 0}{" "}
+                {t("settings.sessions")}
+              </span>
+              <div className="button-group">
+                <Button
+                  variant="quiet"
+                  onClick={() => void startPairing()}
+                  disabled={coreStatus !== "online"}
+                >
+                  {t("settings.startPairing")}
+                </Button>
+                <Button variant="danger" onClick={() => void disableRemote()} disabled={!remote?.enabled}>
+                  {t("settings.disableRemote")}
+                </Button>
+              </div>
+            </div>
+            {pairing && (
+              <Notice tone="warning" title={t("settings.pairingCode")}>
+                {pairing.code} · {t("settings.expires")}{" "}
+                {new Date(pairing.expires_at * 1000).toLocaleTimeString()}
+              </Notice>
+            )}
+            {remote?.sessions.map((session) => (
+              <div className="subsystem" key={session.session_id}>
+                <span>
+                  {session.origin} ·{" "}
+                  {session.expired || session.revoked ? t("settings.inactive") : t("settings.active")}
+                </span>
+                <Button
+                  variant="quiet"
+                  onClick={() =>
+                    void api.revokeRemote(session.session_id).then(() => api.remoteStatus().then(setRemote))
+                  }
+                >
+                  {t("settings.revoke")}
+                </Button>
+              </div>
+            ))}
+            <div className="subsystem-list" style={{ marginTop: 16 }}>
+              <div className="subsystem">
+                <span>
+                  Cloudflared
+                  <small>{tunnel?.message ?? t("settings.tunnelDefaultMessage")}</small>
+                </span>
+                <span className={tunnel?.status === "online" ? "good" : "muted"}>
+                  {tunnel?.status ?? t("settings.off")}
+                </span>
+              </div>
+            </div>
+            <div className="stack" style={{ marginTop: 16 }}>
+              <Field label={t("settings.tunnelExecutable")} help={t("settings.tunnelExecutableHelp")}>
+                <input
+                  className="input"
+                  aria-label={t("settings.tunnelExecutable")}
+                  value={tunnelExecutable}
+                  onChange={(event) => setTunnelExecutable(event.target.value)}
+                  placeholder="cloudflared"
+                />
+              </Field>
+              <Field label={t("settings.tunnelYaml")} help={t("settings.tunnelYamlHelp")}>
+                <input
+                  className="input"
+                  aria-label={t("settings.tunnelYaml")}
+                  value={tunnelConfigPath}
+                  onChange={(event) => setTunnelConfigPath(event.target.value)}
+                  placeholder="C:\\Users\\you\\.cloudflared\\config.yml"
+                />
+              </Field>
+              <div className="button-group">
+                <Button
+                  variant="quiet"
+                  onClick={() => void configureTunnel()}
+                  disabled={tunnelBusy || coreStatus !== "online"}
+                >
+                  {t("settings.validateTunnel")}
+                </Button>
+                <Button onClick={() => void startTunnel()} disabled={tunnelBusy || !remote?.enabled}>
+                  {t("settings.startTunnel")}
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={() => void stopTunnel()}
+                  disabled={tunnelBusy || coreStatus !== "online"}
+                >
+                  {t("settings.stopTunnel")}
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </details>
         <Card>
           <div className="card-header">
             <div>
-              <h2>Remote Access</h2>
-              <p>
-                OFF by default. Pairing starts locally, stores only session hashes, and authenticates remote
-                HTTP/WebSocket with a Secure HttpOnly cookie.
-              </p>
-            </div>
-            <KeyRound size={18} color="var(--warning)" />
-          </div>
-          <Field
-            label="Registered HTTPS origin"
-            help="Use the exact HTTPS origin served by the remote access gateway; no path, query or wildcard."
-          >
-            <input
-              className="input"
-              aria-label="Registered HTTPS origin"
-              value={origin}
-              onChange={(event) => setOrigin(event.target.value)}
-              placeholder="https://remote.example"
-            />
-          </Field>
-          <div className="form-actions">
-            <span className="muted">
-              Status: {remote?.status ?? "off"} · {remote?.sessions.length ?? 0} session(s)
-            </span>
-            <div className="button-group">
-              <Button variant="quiet" onClick={() => void startPairing()} disabled={coreStatus !== "online"}>
-                Start one-time pairing
-              </Button>
-              <Button variant="danger" onClick={() => void disableRemote()} disabled={!remote?.enabled}>
-                Disable remote
-              </Button>
-            </div>
-          </div>
-          {pairing && (
-            <Notice tone="warning" title="One-time pairing code">
-              {pairing.code} · expires {new Date(pairing.expires_at * 1000).toLocaleTimeString()}
-            </Notice>
-          )}
-          {remote?.sessions.map((session) => (
-            <div className="subsystem" key={session.session_id}>
-              <span>
-                {session.origin} · {session.expired || session.revoked ? "inactive" : "active"}
-              </span>
-              <Button
-                variant="quiet"
-                onClick={() =>
-                  void api.revokeRemote(session.session_id).then(() => api.remoteStatus().then(setRemote))
-                }
-              >
-                Revoke
-              </Button>
-            </div>
-          ))}
-          <div className="subsystem-list" style={{ marginTop: 16 }}>
-            <div className="subsystem">
-              <span>
-                Cloudflared
-                <small>
-                  {tunnel?.message ?? "Explicit configuration only; no download or silent install."}
-                </small>
-              </span>
-              <span className={tunnel?.status === "online" ? "good" : "muted"}>
-                {tunnel?.status ?? "off"}
-              </span>
-            </div>
-          </div>
-          <div className="stack" style={{ marginTop: 16 }}>
-            <Field
-              label="Cloudflared executable"
-              help="Optional absolute executable path or a user-managed PATH entry. DS5Forge never downloads it."
-            >
-              <input
-                className="input"
-                aria-label="Cloudflared executable"
-                value={tunnelExecutable}
-                onChange={(event) => setTunnelExecutable(event.target.value)}
-                placeholder="cloudflared"
-              />
-            </Field>
-            <Field
-              label="Cloudflared YAML config"
-              help="Absolute YAML path; raw tunnel tokens are rejected and the file is never exported."
-            >
-              <input
-                className="input"
-                aria-label="Cloudflared YAML config"
-                value={tunnelConfigPath}
-                onChange={(event) => setTunnelConfigPath(event.target.value)}
-                placeholder="C:\\Users\\you\\.cloudflared\\config.yml"
-              />
-            </Field>
-            <div className="button-group">
-              <Button
-                variant="quiet"
-                onClick={() => void configureTunnel()}
-                disabled={tunnelBusy || coreStatus !== "online"}
-              >
-                Validate tunnel config
-              </Button>
-              <Button onClick={() => void startTunnel()} disabled={tunnelBusy || !remote?.enabled}>
-                Start tunnel
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() => void stopTunnel()}
-                disabled={tunnelBusy || coreStatus !== "online"}
-              >
-                Stop tunnel
-              </Button>
-            </div>
-          </div>
-        </Card>
-        <Card>
-          <div className="card-header">
-            <div>
-              <h2>Advanced</h2>
-              <p>Diagnostics exports are bounded and sanitized for support review.</p>
+              <h2>{t("settings.advanced")}</h2>
+              <p>{t("settings.advancedHelp")}</p>
             </div>
             <ShieldCheck size={18} color="var(--success)" />
           </div>
           <dl className="data-list">
             <div className="data-item">
-              <dt>API endpoint</dt>
+              <dt>{t("settings.apiEndpoint")}</dt>
               <dd>{API_BASE_URL}</dd>
             </div>
             <div className="data-item">
-              <dt>Transport</dt>
-              <dd>USB / wired only</dd>
+              <dt>{t("settings.transport")}</dt>
+              <dd>{t("settings.usbWiredOnly")}</dd>
             </div>
             <div className="data-item">
-              <dt>Virtual controller</dt>
-              <dd>Unavailable by decision; no driver is installed</dd>
+              <dt>{t("settings.virtualController")}</dt>
+              <dd>{t("settings.virtualUnavailable")}</dd>
             </div>
           </dl>
           <Button
@@ -631,24 +633,21 @@ export function SettingsPage() {
             onClick={() => void exportSupportBundle()}
             disabled={coreStatus !== "online"}
           >
-            <Download size={15} /> Export Support Bundle
+            <Download size={15} /> {t("settings.exportSupport")}
           </Button>
         </Card>
         {draft && (
           <Card>
             <div className="card-header">
               <div>
-                <h2>Microphone button behavior</h2>
-                <p>These labels map directly to the current `master`, `rumble` and `trackpad` wire values.</p>
+                <h2>{t("settings.micButton")}</h2>
+                <p>{t("settings.micButtonHelp")}</p>
               </div>
               <MonitorCog size={18} color="var(--violet)" />
             </div>
-            <Field
-              label="Button action"
-              help={micBehaviors.find((item) => item.value === draft.mic_button)?.help}
-            >
+            <Field label={t("settings.buttonAction")} help={micHelp(draft.mic_button)}>
               <Select
-                aria-label="Microphone button behavior"
+                aria-label={t("settings.micButton")}
                 value={draft.mic_button}
                 disabled={coreStatus !== "online" || saving}
                 onChange={(event) =>
@@ -660,17 +659,17 @@ export function SettingsPage() {
                 }
               >
                 {micBehaviors.map((item) => (
-                  <option key={item.value} value={item.value}>
-                    {item.label}
+                  <option key={item} value={item}>
+                    {micLabel(item)}
                   </option>
                 ))}
               </Select>
             </Field>
             <div className="form-actions">
-              <span className="muted">{dirty ? "Unsaved settings" : "Settings are up to date."}</span>
+              <span className="muted">{dirty ? t("settings.unsaved") : t("settings.upToDate")}</span>
               <Button onClick={() => void save()} disabled={!dirty || saving || coreStatus !== "online"}>
                 <Save size={15} />
-                {saving ? "Saving…" : "Save settings"}
+                {saving ? t("settings.saving") : t("settings.saveSettings")}
               </Button>
             </div>
           </Card>
@@ -678,22 +677,22 @@ export function SettingsPage() {
         <Card>
           <div className="card-header">
             <div>
-              <h2>Local service</h2>
-              <p>Informational only. P1 does not expose an arbitrary endpoint editor.</p>
+              <h2>{t("settings.localService")}</h2>
+              <p>{t("settings.localServiceHelp")}</p>
             </div>
           </div>
           <dl className="data-list">
             <div className="data-item">
-              <dt>API endpoint</dt>
+              <dt>{t("settings.apiEndpoint")}</dt>
               <dd>{API_BASE_URL}</dd>
             </div>
             <div className="data-item">
-              <dt>Transport scope</dt>
-              <dd>USB / wired only</dd>
+              <dt>{t("settings.transportScope")}</dt>
+              <dd>{t("settings.usbWiredOnly")}</dd>
             </div>
             <div className="data-item">
-              <dt>Core start</dt>
-              <dd>Installed desktop shell manages the packaged core automatically.</dd>
+              <dt>{t("settings.coreStart")}</dt>
+              <dd>{t("settings.coreStartManaged")}</dd>
             </div>
           </dl>
         </Card>

@@ -17,6 +17,7 @@ import {
   type HealthResponse,
   type HapticsTestRun,
   type LightbarState,
+  type PlayerLedState,
   type ProfileLoadResponse,
   type ProfileSaveResponse,
   type ProfileSummary,
@@ -69,6 +70,8 @@ type RuntimeContextValue = RuntimeView & {
   deleteProfile: (name: string) => Promise<void>;
   applyLightbar: (state: LightbarState) => Promise<LightbarState>;
   resetLightbar: () => Promise<LightbarState>;
+  applyPlayerLeds: (state: PlayerLedState) => Promise<PlayerLedState>;
+  resetPlayerLeds: () => Promise<PlayerLedState>;
   applyTriggers: (state: { left: TriggerEffect; right: TriggerEffect }) => Promise<TriggerState>;
   previewTriggers: (
     state: { left: TriggerEffect; right: TriggerEffect },
@@ -332,6 +335,32 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     [updateWith],
   );
 
+  const applyPlayerLeds = useCallback(
+    (state: PlayerLedState) =>
+      updateWith(async () => {
+        const player_leds = await api.applyPlayerLeds(state);
+        setView((current) => ({
+          ...current,
+          runtime: current.runtime ? { ...current.runtime, player_leds } : current.runtime,
+        }));
+        return player_leds;
+      }),
+    [updateWith],
+  );
+
+  const resetPlayerLeds = useCallback(
+    () =>
+      updateWith(async () => {
+        const player_leds = await api.resetPlayerLeds();
+        setView((current) => ({
+          ...current,
+          runtime: current.runtime ? { ...current.runtime, player_leds } : current.runtime,
+        }));
+        return player_leds;
+      }),
+    [updateWith],
+  );
+
   const applyTriggers = useCallback(
     (state: { left: TriggerEffect; right: TriggerEffect }) =>
       updateWith(async () => {
@@ -497,6 +526,8 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
       deleteProfile,
       applyLightbar,
       resetLightbar,
+      applyPlayerLeds,
+      resetPlayerLeds,
       applyTriggers,
       previewTriggers,
       cancelTriggerPreview,
@@ -509,6 +540,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     }),
     [
       applyLightbar,
+      applyPlayerLeds,
       applyTriggers,
       cancelHapticsTest,
       cancelTriggerPreview,
@@ -522,6 +554,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
       saveProfile,
       saveControllerProfile,
       resetLightbar,
+      resetPlayerLeds,
       resetTriggers,
       setRumble,
       setTouchpad,

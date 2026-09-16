@@ -175,6 +175,35 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             nested_null = await client.patch("/api/v1/config", json={"rumble": {"gate": None}})
             self.assertEqual(nested_null.status_code, 422)
 
+    async def test_p5_exclusive_candidates_and_duplicate_contracts(self):
+        import httpx
+
+        transport = httpx.ASGITransport(app=self.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            capabilities = await client.get("/api/v1/exclusive/capabilities")
+            self.assertEqual(capabilities.status_code, 200)
+            self.assertFalse(capabilities.json()["provider_available"])
+            self.assertFalse(capabilities.json()["physical_suppression_verified"])
+
+            status = await client.get("/api/v1/exclusive/status")
+            self.assertEqual(status.status_code, 200)
+            self.assertFalse(status.json()["enabled"])
+            self.assertTrue(status.json()["double_input_risk"])
+
+            diagnostic = await client.get("/api/v1/diagnostics/duplicate-input")
+            self.assertEqual(diagnostic.status_code, 200)
+            self.assertTrue(diagnostic.json()["risk"])
+            self.assertTrue(diagnostic.json()["physical_visible"])
+
+            candidates = await client.get("/api/v1/games/candidates")
+            self.assertEqual(candidates.status_code, 200)
+            self.assertEqual(candidates.json(), {"candidates": []})
+
+            state = await client.get("/api/v1/state")
+            self.assertEqual(state.status_code, 200)
+            self.assertIn("exclusive", state.json())
+            self.assertIn("player_leds", state.json())
+
     async def test_p4_remote_http_requires_origin_and_session_cookie(self):
         import httpx
 

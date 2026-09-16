@@ -11,6 +11,8 @@ import {
   ConnectionStateSchema,
   ErrorSnapshotSchema,
   EventEnvelopeSchema,
+  ExclusiveStatusSchema,
+  DuplicateInputDiagnosticSchema,
   ForegroundApplicationSchema,
   GameActivatedEventSchema,
   GameDeactivatedEventSchema,
@@ -54,10 +56,16 @@ const KNOWN_TYPES = new Set([
   "game.conflict_detected",
   "automation.changed",
   "synthetic.release",
+  "exclusive.changed",
+  "exclusive.recovered",
+  "diagnostics.duplicate_input",
+  "adaptive_trigger.changed",
 ]);
 const KNOWN_LAB_KINDS = new Set([
   "lightbar.applied",
   "lightbar.reset",
+  "player_leds.applied",
+  "player_leds.reset",
   "triggers.applied",
   "triggers.reset",
   "triggers.preview",
@@ -266,6 +274,34 @@ export function parseSocketMessage(value: unknown): ParsedSocketMessage {
           type: envelope.type,
           version: 1,
           payload: z.object({ report: ReleaseReportSchema }).strict().parse(envelope.payload),
+        },
+      };
+    case "exclusive.changed":
+    case "exclusive.recovered":
+      return {
+        kind: "event",
+        event: {
+          type: envelope.type,
+          version: 1,
+          payload: z.object({ exclusive: ExclusiveStatusSchema }).strict().parse(envelope.payload),
+        },
+      };
+    case "diagnostics.duplicate_input":
+      return {
+        kind: "event",
+        event: {
+          type: envelope.type,
+          version: 1,
+          payload: z.object({ diagnostic: DuplicateInputDiagnosticSchema }).strict().parse(envelope.payload),
+        },
+      };
+    case "adaptive_trigger.changed":
+      return {
+        kind: "event",
+        event: {
+          type: envelope.type,
+          version: 1,
+          payload: z.record(z.string(), z.unknown()).parse(envelope.payload),
         },
       };
     default:

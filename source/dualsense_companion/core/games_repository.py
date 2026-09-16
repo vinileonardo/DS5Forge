@@ -12,6 +12,7 @@ from .. import paths
 from ..diagnostics.logging import get_logger
 from ..domain.errors import DS5ForgeError, ErrorCode
 from ..domain.games import (
+    AdaptiveTriggerMode,
     Chord,
     CompatibilityMode,
     ExitPolicy,
@@ -206,6 +207,7 @@ def game_definitions(document: ABCMapping[str, Any]) -> tuple[GameDefinition, ..
             executable_path=item["executable_path"],
             profile=item["profile"],
             compatibility_mode=CompatibilityMode(item["compatibility_mode"]),
+            adaptive_trigger_mode=AdaptiveTriggerMode(item.get("adaptive_trigger_mode", "native")),
             enabled=item["enabled"],
         )
         for item in document["games"]
@@ -314,7 +316,16 @@ def _validate_games(value: Any) -> list[dict[str, Any]]:
         raise GameRegistryValidationError(fields={"games": f"maximum is {MAX_GAMES}"})
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
-    allowed = {"id", "name", "executables", "executable_path", "profile", "compatibility_mode", "enabled"}
+    allowed = {
+        "id",
+        "name",
+        "executables",
+        "executable_path",
+        "profile",
+        "compatibility_mode",
+        "adaptive_trigger_mode",
+        "enabled",
+    }
     for index, raw in enumerate(value):
         prefix = f"games.{index}"
         if not isinstance(raw, ABCMapping):
@@ -348,6 +359,11 @@ def _validate_games(value: Any) -> list[dict[str, Any]]:
             CompatibilityMode,
             prefix + ".compatibility_mode",
         )
+        trigger_mode = _strict_choice(
+            raw.get("adaptive_trigger_mode", AdaptiveTriggerMode.NATIVE.value),
+            AdaptiveTriggerMode,
+            prefix + ".adaptive_trigger_mode",
+        )
         enabled = _strict_bool(raw.get("enabled", True), f"{prefix}.enabled")
         result.append(
             {
@@ -357,6 +373,7 @@ def _validate_games(value: Any) -> list[dict[str, Any]]:
                 "executable_path": executable_path,
                 "profile": profile,
                 "compatibility_mode": mode,
+                "adaptive_trigger_mode": trigger_mode,
                 "enabled": enabled,
             }
         )

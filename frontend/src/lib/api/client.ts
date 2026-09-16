@@ -7,6 +7,7 @@ import {
   ChordsResponseSchema,
   CompatibilityStateSchema,
   ConflictDiagnosticsResponseSchema,
+  DuplicateInputDiagnosticSchema,
   type ConfigPatch,
   ControllerTelemetrySchema,
   ForegroundApplicationSchema,
@@ -14,10 +15,14 @@ import {
   GameMatchResponseSchema,
   GamesResponseSchema,
   FullControllerProfileSchema,
+  GameCandidatesResponseSchema,
   GuidedDiagnosticsSchema,
   GestureConfigSchema,
   HapticsTestRunSchema,
+  ExclusiveCapabilitySchema,
+  ExclusiveStatusSchema,
   LightbarSchema,
+  PlayerLedSchema,
   MappingsResponseSchema,
   DeleteProfileResponseSchema,
   HealthResponseSchema,
@@ -47,12 +52,15 @@ import {
   type GestureConfig,
   type GuidedDiagnostics,
   type LightbarState,
+  type PlayerLedState,
   type Lifecycle,
   type RumbleConfig,
   type RuntimeState,
   type RemoteStatus,
   type StickCalibration,
   type TriggerEffect,
+  type ExclusiveStatus,
+  type DuplicateInputDiagnostic,
 } from "./contracts";
 import { ApiError, ApiProtocolError } from "./errors";
 
@@ -224,6 +232,8 @@ export const api = {
   health: () => request("/health", HealthResponseSchema),
   state: () => request("/state", RuntimeStateSchema),
   games: () => request("/games", GamesResponseSchema),
+  gameCandidates: () =>
+    request("/games/candidates", GameCandidatesResponseSchema).then((value) => value.candidates),
   addGame: (game: GameDefinition) =>
     request("/games", GameDefinitionSchema, {
       ...jsonPost(game),
@@ -275,6 +285,14 @@ export const api = {
     request(`/games/${encodeURIComponent(id)}/test-match`, GameMatchResponseSchema, jsonPost()),
   conflictDiagnostics: () =>
     request<{ conflicts: ConflictDiagnostic[] }>("/diagnostics/conflicts", ConflictDiagnosticsResponseSchema),
+  duplicateInputDiagnostics: () =>
+    request<DuplicateInputDiagnostic>("/diagnostics/duplicate-input", DuplicateInputDiagnosticSchema),
+  exclusiveCapabilities: () => request("/exclusive/capabilities", ExclusiveCapabilitySchema),
+  exclusiveStatus: () => request<ExclusiveStatus>("/exclusive/status", ExclusiveStatusSchema),
+  enableExclusive: () => request<ExclusiveStatus>("/exclusive/enable", ExclusiveStatusSchema, jsonPost()),
+  disableExclusive: () => request<ExclusiveStatus>("/exclusive/disable", ExclusiveStatusSchema, jsonPost()),
+  exclusiveHeartbeat: () =>
+    request<ExclusiveStatus>("/exclusive/heartbeat", ExclusiveStatusSchema, jsonPost()),
   config: () => request("/config", ConfigSchema),
   updateConfig: (patch: ConfigPatch) => request("/config", ConfigSchema, json(patch)),
   profiles: () => request("/profiles", ProfilesResponseSchema),
@@ -314,6 +332,13 @@ export const api = {
       headers: { "Content-Type": "application/json" },
     }),
   resetLightbar: () => request("/controller/lightbar/reset", LightbarSchema, jsonPost()),
+  playerLeds: () => request<PlayerLedState>("/controller/player-leds", PlayerLedSchema),
+  applyPlayerLeds: (state: PlayerLedState) =>
+    request("/controller/player-leds", PlayerLedSchema, {
+      ...jsonPut(state),
+      headers: { "Content-Type": "application/json" },
+    }),
+  resetPlayerLeds: () => request("/controller/player-leds/reset", PlayerLedSchema, jsonPost()),
   triggers: () => request("/controller/triggers", TriggerStateSchema),
   applyTriggers: (state: { left: TriggerEffect; right: TriggerEffect }) =>
     request("/controller/triggers", TriggerStateSchema, {

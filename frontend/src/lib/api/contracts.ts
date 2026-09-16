@@ -51,6 +51,7 @@ export const ControllerCapabilitiesSchema = z
     microphone_button: z.boolean(),
     lightbar: z.boolean(),
     adaptive_triggers: z.boolean(),
+    adaptive_trigger_output_reports: z.boolean().default(false),
     availability: z
       .record(
         z.string(),
@@ -73,7 +74,15 @@ export const AudioSchema = z
   .object({ status: z.string(), device: z.string().nullable(), error: z.string().nullable() })
   .strict();
 
-export const TouchPointSchema = z.object({ active: z.boolean(), x: finiteNumber, y: finiteNumber }).strict();
+export const TouchPointSchema = z
+  .object({
+    active: z.boolean(),
+    x: finiteNumber,
+    y: finiteNumber,
+    contact_id: z.number().int().nullable().default(null),
+    raw: z.record(z.string(), z.unknown()).default({}),
+  })
+  .strict();
 
 export const StickTelemetrySchema = z
   .object({
@@ -159,8 +168,12 @@ export const LightbarSchema = z
     enabled: z.boolean(),
     brightness: z.number().int().min(0).max(2),
     pulse: z.enum(["off", "slow", "fast"]),
+    intensity: bounded(0, 1).default(1),
+    effect: z.string().default("steady"),
   })
   .strict();
+
+export const PlayerLedSchema = z.object({ enabled: z.boolean(), intensity: bounded(0, 1) }).strict();
 
 export const TriggerEffectSchema = z
   .object({
@@ -251,11 +264,25 @@ export const GameDefinitionSchema = z
     executable_path: z.string().nullable(),
     profile: z.string().min(1),
     compatibility_mode: z.enum(["native", "remap", "virtual"]),
+    adaptive_trigger_mode: z.enum(["native", "reactive", "off"]).default("native"),
     enabled: z.boolean(),
   })
   .strict();
 
 export const GamesResponseSchema = z.object({ games: z.array(GameDefinitionSchema) }).strict();
+
+export const GameCandidateSchema = z
+  .object({
+    executable_name: z.string(),
+    executable_path: z.string().nullable(),
+    pid: z.number().int().nullable(),
+    title: z.string().nullable(),
+    source: z.string(),
+    observed_at: finiteNumber,
+  })
+  .strict();
+
+export const GameCandidatesResponseSchema = z.object({ candidates: z.array(GameCandidateSchema) }).strict();
 
 export const RuleEvaluationSchema = z
   .object({
@@ -327,6 +354,67 @@ export const CompatibilityStateSchema = z
     double_input_risk: z.boolean(),
     reason: z.string().nullable(),
     changed_at: finiteNumber,
+  })
+  .strict();
+
+export const ProviderProvenanceSchema = z
+  .object({
+    provider: z.string(),
+    version: z.string().nullable(),
+    executable: z.string().nullable(),
+    sha256: z.string().nullable(),
+    signature_verified: z.boolean(),
+    provenance_verified: z.boolean(),
+    integrity_verified: z.boolean(),
+    windows_validated: z.boolean(),
+    evidence: z.array(z.string()),
+  })
+  .strict();
+
+export const ExclusiveCapabilitySchema = z
+  .object({
+    provider_available: z.boolean(),
+    provider_installed: z.boolean(),
+    virtual_output_reports: z.boolean(),
+    physical_suppression_available: z.boolean(),
+    physical_suppression_verified: z.boolean(),
+    provenance: ProviderProvenanceSchema,
+    reason: z.string(),
+  })
+  .strict();
+
+export const ExclusiveStatusSchema = z
+  .object({
+    mode: z.enum(["off", "starting", "active", "stopping", "error"]),
+    enabled: z.boolean(),
+    generation: z.number().int().nonnegative(),
+    ownership_acquired: z.boolean(),
+    heartbeat_at: finiteNumber,
+    heartbeat_timeout_ms: z.number().int().nonnegative(),
+    stale: z.boolean(),
+    physical_input_visible: z.boolean(),
+    virtual_input_active: z.boolean(),
+    physical_suppression_active: z.boolean(),
+    double_input_risk: z.boolean(),
+    capability: ExclusiveCapabilitySchema,
+    reason: z.string().nullable(),
+    last_error: z.string().nullable(),
+    mirrored_sequence: z.number().int().nonnegative(),
+    updated_at: finiteNumber,
+  })
+  .strict();
+
+export const DuplicateInputDiagnosticSchema = z
+  .object({
+    risk: z.boolean(),
+    physical_visible: z.boolean(),
+    virtual_active: z.boolean(),
+    suppression_verified: z.boolean(),
+    exclusive_enabled: z.boolean(),
+    severity: z.string(),
+    message: z.string(),
+    evidence: z.array(z.string()),
+    checked_at: finiteNumber,
   })
   .strict();
 
@@ -435,6 +523,13 @@ const LabLightbarEventSchema = z
   })
   .strict();
 
+const LabPlayerLedEventSchema = z
+  .object({
+    kind: z.enum(["player_leds.applied", "player_leds.reset"]),
+    player_leds: PlayerLedSchema,
+  })
+  .strict();
+
 const LabTriggerEventSchema = z
   .object({
     kind: z.enum(["triggers.applied", "triggers.reset", "triggers.preview"]),
@@ -459,6 +554,7 @@ const LabSticksEventSchema = z
 
 export const ControllerLabEventSchema = z.union([
   LabLightbarEventSchema,
+  LabPlayerLedEventSchema,
   LabTriggerEventSchema,
   LabHapticsEventSchema,
   LabSticksEventSchema,
@@ -485,7 +581,10 @@ export const RuntimeStateSchema = z
       enabled: true,
       brightness: 2,
       pulse: "off",
+      intensity: 1,
+      effect: "steady",
     }),
+    player_leds: PlayerLedSchema.optional().default({ enabled: true, intensity: 1 }),
     triggers: TriggerStateSchema.optional().default({
       left: { mode: "off", start_position: 0, end_position: 255, force: 0, frequency: 0, amplitude: 0 },
       right: { mode: "off", start_position: 0, end_position: 255, force: 0, frequency: 0, amplitude: 0 },
@@ -530,6 +629,7 @@ export const RuntimeStateSchema = z
     compatibility: CompatibilityStateSchema.optional(),
     synthetic_outputs: SyntheticOutputStateSchema.optional(),
     conflicts: z.array(ConflictDiagnosticSchema).optional().default([]),
+    exclusive: ExclusiveStatusSchema.optional(),
   })
   .strict();
 
@@ -707,18 +807,19 @@ export type UpdateCheck = z.infer<typeof UpdateCheckSchema>;
 // Input typing keeps the client compatible with P0/P1 snapshots while the
 // schema parser supplies defaults for newly introduced Controller Lab fields.
 export type RuntimeState = z.input<typeof RuntimeStateSchema>;
-export type TouchPoint = z.infer<typeof TouchPointSchema>;
+export type TouchPoint = z.input<typeof TouchPointSchema>;
 export type StickTelemetry = z.infer<typeof StickTelemetrySchema>;
-export type ControllerInput = z.infer<typeof ControllerInputSchema>;
-export type ControllerTelemetry = z.infer<typeof ControllerTelemetrySchema>;
-export type LightbarState = z.infer<typeof LightbarSchema>;
+export type ControllerInput = z.input<typeof ControllerInputSchema>;
+export type ControllerTelemetry = z.input<typeof ControllerTelemetrySchema>;
+export type LightbarState = z.input<typeof LightbarSchema>;
+export type PlayerLedState = z.infer<typeof PlayerLedSchema>;
 export type TriggerEffect = z.infer<typeof TriggerEffectSchema>;
 export type TriggerState = z.infer<typeof TriggerStateSchema>;
 export type TriggerPreview = z.infer<typeof TriggerPreviewSchema>;
 export type HapticsTestRun = z.infer<typeof HapticsTestRunSchema>;
 export type StickCalibration = z.infer<typeof StickCalibrationSchema>;
 export type GestureConfig = z.infer<typeof GestureConfigSchema>;
-export type ControllerProfile = z.infer<typeof FullControllerProfileSchema>;
+export type ControllerProfile = z.input<typeof FullControllerProfileSchema>;
 export type ProfileLoadResponse = z.infer<typeof ProfileLoadResponseSchema>;
 export type ProfileSaveResponse = z.infer<typeof ProfileSaveResponseSchema>;
 export type RumbleConfig = z.infer<typeof RumbleConfigSchema>;
@@ -727,6 +828,10 @@ export type Config = z.infer<typeof ConfigSchema>;
 export type ProfileSummary = z.infer<typeof ProfileSummarySchema>;
 export type ForegroundApplication = z.infer<typeof ForegroundApplicationSchema>;
 export type GameDefinition = z.infer<typeof GameDefinitionSchema>;
+export type GameCandidate = z.infer<typeof GameCandidateSchema>;
+export type ExclusiveCapability = z.infer<typeof ExclusiveCapabilitySchema>;
+export type ExclusiveStatus = z.infer<typeof ExclusiveStatusSchema>;
+export type DuplicateInputDiagnostic = z.infer<typeof DuplicateInputDiagnosticSchema>;
 export type GameMatch = z.infer<typeof GameMatchSchema>;
 export type GameMatchResponse = z.infer<typeof GameMatchResponseSchema>;
 export type GameActivatedEvent = z.infer<typeof GameActivatedEventSchema>;
@@ -768,7 +873,11 @@ export type EventType =
   | "compatibility.changed"
   | "game.conflict_detected"
   | "automation.changed"
-  | "synthetic.release";
+  | "synthetic.release"
+  | "exclusive.changed"
+  | "exclusive.recovered"
+  | "diagnostics.duplicate_input"
+  | "adaptive_trigger.changed";
 
 export type RuntimeEvent =
   | { type: "state.snapshot"; version: 1; payload: { state: RuntimeState } }
@@ -804,7 +913,11 @@ export type RuntimeEvent =
   | { type: "compatibility.changed"; version: 1; payload: { compatibility: CompatibilityState } }
   | { type: "game.conflict_detected"; version: 1; payload: { conflict: ConflictDiagnostic } }
   | { type: "automation.changed"; version: 1; payload: AutomationChangedEvent }
-  | { type: "synthetic.release"; version: 1; payload: { report: Record<string, unknown> } };
+  | { type: "synthetic.release"; version: 1; payload: { report: Record<string, unknown> } }
+  | { type: "exclusive.changed"; version: 1; payload: { exclusive: ExclusiveStatus } }
+  | { type: "exclusive.recovered"; version: 1; payload: { exclusive: ExclusiveStatus } }
+  | { type: "diagnostics.duplicate_input"; version: 1; payload: { diagnostic: DuplicateInputDiagnostic } }
+  | { type: "adaptive_trigger.changed"; version: 1; payload: Record<string, unknown> };
 
 export const RUMBLE_FIELD_SPECS: ReadonlyArray<{
   key: keyof RumbleConfig;

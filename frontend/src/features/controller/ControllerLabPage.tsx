@@ -1,5 +1,5 @@
 import { Gamepad2, Lightbulb, RotateCcw, Save, TimerReset, Zap } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   Button,
@@ -16,10 +16,12 @@ import {
 import type {
   ControllerInput,
   LightbarState,
+  PlayerLedState,
   StickCalibration,
   TriggerEffect,
   TriggerPreview,
 } from "../../lib/api/contracts";
+import { useI18n } from "../../lib/i18n";
 import { useRuntime } from "../../lib/runtime/RuntimeProvider";
 import {
   DigitalInputVisualizer,
@@ -543,18 +545,59 @@ function LightingTab({
   runtime: ReturnType<typeof useRuntime>["runtime"];
   canControl: boolean;
 }) {
-  const { applyLightbar, resetLightbar } = useRuntime();
+  const { applyLightbar, resetLightbar, applyPlayerLeds, resetPlayerLeds } = useRuntime();
+  const { t } = useI18n();
   const supported = localCapability(runtime, "lightbar");
   const current = runtime?.lightbar ?? EMPTY_LIGHTBAR;
+  const currentPlayerLeds: PlayerLedState = useMemo(
+    () => runtime?.player_leds ?? { enabled: true, intensity: 1 },
+    [runtime?.player_leds],
+  );
   const [draft, setDraft] = useState(current);
   const [dirty, setDirty] = useState(false);
-  const [pending, setPending] = useState<"apply" | "reset" | null>(null);
+  const [pending, setPending] = useState<"apply" | "reset" | "player-leds" | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [playerLeds, setPlayerLeds] = useState<PlayerLedState>(currentPlayerLeds);
+  const [playerLedsDirty, setPlayerLedsDirty] = useState(false);
 
   useEffect(() => {
     if (!dirty) setDraft(current);
   }, [current, dirty]);
+
+  useEffect(() => {
+    if (!playerLedsDirty) setPlayerLeds(currentPlayerLeds);
+  }, [currentPlayerLeds, playerLedsDirty]);
+
+  async function savePlayerLeds() {
+    setPending("player-leds");
+    setError(null);
+    try {
+      const result = await applyPlayerLeds(playerLeds);
+      setPlayerLeds(result);
+      setPlayerLedsDirty(false);
+      setMessage("Player LED state applied.");
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function clearPlayerLeds() {
+    setPending("player-leds");
+    setError(null);
+    try {
+      const result = await resetPlayerLeds();
+      setPlayerLeds(result);
+      setPlayerLedsDirty(false);
+      setMessage("Player LED state reset.");
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setPending(null);
+    }
+  }
 
   function update(patch: Partial<LightbarState>) {
     setDirty(true);
@@ -644,16 +687,19 @@ function LightingTab({
               <span className="muted">{hex.toUpperCase()}</span>
             </div>
           </Field>
-          <Field label="Brightness" help="Matches the adapter's published 0–2 brightness levels.">
-            <Select
-              value={draft.brightness}
+          <Field label={t("controller.lightbarIntensity")} help={t("controller.lightbarIntensityHelp")}>
+            <input
+              className="input"
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              aria-label={t("controller.lightbarIntensity")}
+              value={Math.round((draft.intensity ?? 1) * 100)}
               disabled={!canControl || !supported || pending !== null}
-              onChange={(event) => update({ brightness: Number(event.target.value) })}
-            >
-              <option value={0}>0 · High</option>
-              <option value={1}>1 · Medium</option>
-              <option value={2}>2 · Low</option>
-            </Select>
+              onChange={(event) => update({ intensity: Number(event.target.value) / 100 })}
+            />
+            <span className="muted">{Math.round((draft.intensity ?? 1) * 100)}%</span>
           </Field>
           <Field
             label="Pulse"
@@ -696,6 +742,61 @@ function LightingTab({
           </div>
         </div>
       </Card>
+      <Card>
+        <div className="card-header">
+          <div>
+            <h2>{t("controller.playerLeds")}</h2>
+            <p>{t("controller.playerLedsHelp")}</p>
+          </div>
+          <Lightbulb size={18} color="var(--violet)" />
+        </div>
+        <div className="card-grid grid-2">
+          <Field label={t("controller.playerLedsIntensity")}>
+            <input
+              className="input"
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              aria-label={t("controller.playerLedsIntensity")}
+              value={Math.round(playerLeds.intensity * 100)}
+              disabled={!canControl || !supported || pending !== null}
+              onChange={(event) => {
+                setPlayerLedsDirty(true);
+                setMessage(null);
+                setPlayerLeds((value) => ({ ...value, intensity: Number(event.target.value) / 100 }));
+              }}
+            />
+            <span className="muted">{Math.round(playerLeds.intensity * 100)}%</span>
+          </Field>
+          <Toggle
+            label={t("controller.playerLedsEnabled")}
+            description={t("controller.playerLedsHelp")}
+            checked={playerLeds.enabled}
+            disabled={!canControl || !supported || pending !== null}
+            onChange={(enabled) => {
+              setPlayerLedsDirty(true);
+              setMessage(null);
+              setPlayerLeds((value) => ({ ...value, enabled }));
+            }}
+          />
+        </div>
+        <div className="form-actions">
+          <Button
+            variant="quiet"
+            onClick={() => void clearPlayerLeds()}
+            disabled={!canControl || !supported || pending !== null}
+          >
+            {pending === "player-leds" ? "Working…" : "Reset Player LEDs"}
+          </Button>
+          <Button
+            onClick={() => void savePlayerLeds()}
+            disabled={!canControl || !supported || !playerLedsDirty || pending !== null}
+          >
+            <Save size={15} /> {pending === "player-leds" ? "Applying…" : "Apply Player LEDs"}
+          </Button>
+        </div>
+      </Card>
     </div>
   );
 }
@@ -710,6 +811,7 @@ function SticksTab({
   canControl: boolean;
 }) {
   const { updateStickCalibration } = useRuntime();
+  const { t } = useI18n();
   const current = runtime?.stick_calibration ?? EMPTY_CALIBRATION;
   const [draft, setDraft] = useState(current);
   const [dirty, setDirty] = useState(false);
@@ -744,9 +846,8 @@ function SticksTab({
 
   return (
     <div className="stack" id="controller-lab-sticks" role="tabpanel">
-      <Notice tone="info" title="Visualization-only calibration">
-        Deadzone and center values affect DS5Forge visualization and profile metadata only. They do not modify
-        native game input.
+      <Notice tone="info" title="Calibration scope">
+        {t("controller.calibrationHint")}
       </Notice>
       <ErrorText error={error} />
       {message && (

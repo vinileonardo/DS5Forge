@@ -25,6 +25,19 @@ class CompatibilityMode(StrEnum):
     VIRTUAL = "virtual"
 
 
+class AdaptiveTriggerMode(StrEnum):
+    """Per-game ownership of DS5Forge-generated adaptive-trigger effects.
+
+    ``NATIVE`` (the safe default) never synthesizes effects. ``REACTIVE`` is
+    an explicit opt-in to a clearly-labeled DS5Forge-generated effect driven by
+    real runtime signal. ``OFF`` neutralizes DS5Forge trigger output.
+    """
+
+    NATIVE = "native"
+    REACTIVE = "reactive"
+    OFF = "off"
+
+
 class ProfileOrigin(StrEnum):
     MANUAL = "manual"
     AUTOMATIC = "automatic"
@@ -79,10 +92,13 @@ class GameDefinition:
     executable_path: str | None = None
     profile: str = "Default"
     compatibility_mode: CompatibilityMode = CompatibilityMode.NATIVE
+    adaptive_trigger_mode: AdaptiveTriggerMode = AdaptiveTriggerMode.NATIVE
     enabled: bool = True
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "executables", tuple(str(value) for value in self.executables))
+        if not isinstance(self.adaptive_trigger_mode, AdaptiveTriggerMode):
+            object.__setattr__(self, "adaptive_trigger_mode", AdaptiveTriggerMode(self.adaptive_trigger_mode))
 
     def matches(self, foreground: ForegroundApplication) -> GameMatch:
         if not self.enabled:

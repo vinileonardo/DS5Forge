@@ -1,11 +1,26 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-US">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#080b10" />
     <meta name="description" content="DS5Forge local DualSense companion" />
     <title>DS5Forge</title>
+    <script>
+      (() => {
+        const validThemes = new Set(["Light", "Dark", "Liquid Glass"]);
+        const validLocales = new Set(["en-US", "pt-BR"]);
+        try {
+          const theme = localStorage.getItem("ds5forge.theme");
+          document.documentElement.dataset.theme = validThemes.has(theme) ? theme : "Dark";
+          const locale = localStorage.getItem("ds5forge.locale");
+          document.documentElement.lang = validLocales.has(locale) ? locale : "en-US";
+        } catch {
+          document.documentElement.dataset.theme = "Dark";
+          document.documentElement.lang = "en-US";
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

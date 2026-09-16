@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from ..diagnostics.logging import get_logger
 from ..domain.errors import CapabilityUnavailableError, ControllerUnavailableError, DS5ForgeError, ErrorCode
-from ..domain.models import ConnectionState, ControllerReading, LightbarState, TriggerState
+from ..domain.models import ConnectionState, ControllerReading, LightbarState, PlayerLedState, TriggerState
 from .ports import ControllerAdapter, ControllerFactory
 
 LOGGER = get_logger(__name__)
@@ -172,6 +172,48 @@ class ControllerService:
                     ErrorCode.LIGHTBAR_OUTPUT_FAILED, "Lightbar reset failed.", detail=str(exc)
                 ) from exc
         self.set_lightbar(LightbarState())
+
+    def get_player_leds(self) -> PlayerLedState:
+        adapter = self._require_adapter("lightbar")
+        getter = getattr(adapter, "get_player_leds", None)
+        if not callable(getter):
+            raise CapabilityUnavailableError("lightbar", "The connected adapter does not expose Player LED state.")
+        try:
+            value = getter()
+            return value if isinstance(value, PlayerLedState) else PlayerLedState()
+        except DS5ForgeError:
+            raise
+        except Exception as exc:
+            raise DS5ForgeError(
+                ErrorCode.LIGHTBAR_OUTPUT_FAILED, "Player LED state could not be read.", detail=str(exc)
+            ) from exc
+
+    def set_player_leds(self, state: PlayerLedState) -> None:
+        adapter = self._require_adapter("lightbar")
+        setter = getattr(adapter, "set_player_leds", None)
+        if not callable(setter):
+            raise CapabilityUnavailableError("lightbar", "The connected adapter does not expose Player LED output.")
+        try:
+            setter(state)
+        except DS5ForgeError:
+            raise
+        except Exception as exc:
+            raise DS5ForgeError(ErrorCode.LIGHTBAR_OUTPUT_FAILED, "Player LED output failed.", detail=str(exc)) from exc
+
+    def reset_player_leds(self) -> None:
+        adapter = self._require_adapter("lightbar")
+        resetter = getattr(adapter, "reset_player_leds", None)
+        if callable(resetter):
+            try:
+                resetter()
+                return
+            except DS5ForgeError:
+                raise
+            except Exception as exc:
+                raise DS5ForgeError(
+                    ErrorCode.LIGHTBAR_OUTPUT_FAILED, "Player LED reset failed.", detail=str(exc)
+                ) from exc
+        self.set_player_leds(PlayerLedState())
 
     def set_triggers(self, state: TriggerState) -> None:
         adapter = self._require_adapter("adaptive_triggers")

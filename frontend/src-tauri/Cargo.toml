@@ -1,6 +1,6 @@
 [package]
 name = "ds5forge"
-version = "0.4.0-rc.6"
+version = "0.4.0-rc.7"
 description = "DS5Forge wired DualSense companion shell"
 authors = ["DS5Forge contributors"]
 edition = "2021"
@@ -33,3 +33,6 @@ desktop-plugins = [
   "dep:tauri-plugin-single-instance",
   "dep:tauri-plugin-updater",
 ]
+
+[target.'cfg(target_os = "windows")'.dependencies]
+rfd = { version = "0.15", default-features = false, features = ["common-controls-v6"] }

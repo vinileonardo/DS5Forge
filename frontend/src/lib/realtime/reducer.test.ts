@@ -168,6 +168,7 @@ describe("realtime projection", () => {
       executable_path: null,
       profile: "Game",
       compatibility_mode: "native" as const,
+      adaptive_trigger_mode: "native" as const,
       enabled: true,
     };
     const compatibility = {

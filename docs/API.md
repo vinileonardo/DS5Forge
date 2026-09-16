@@ -43,6 +43,14 @@ All paths use `/api/v1`.
 | GET/PUT | `/mappings` | Read or atomically replace validated remappings |
 | GET/PUT | `/chords` | Read or atomically replace validated input chords |
 | GET | `/diagnostics/conflicts` | Best-effort process-name conflict diagnostics |
+| GET | `/diagnostics/duplicate-input` | Physical/virtual visibility and duplicate-input risk |
+| GET | `/games/candidates` | Running/recent executable candidates; never persists a game |
+| GET | `/exclusive/capabilities` | Provider, output-report and suppression capability gates |
+| GET | `/exclusive/status` | Current Exclusive mode, ownership generation and watchdog state |
+| POST | `/exclusive/enable` | Start a verified Exclusive transaction or return structured unavailable/rollback error |
+| POST | `/exclusive/disable` | Unsuppress physical input and close the virtual session |
+| POST | `/exclusive/heartbeat` | Refresh the active ownership/watchdog lease |
+| GET/PUT/POST | `/controller/player-leds`, `/controller/player-leds/reset` | Separate Player LED state and intensity |
 
 Controller Lab writes are strict and capability-gated. Unsupported lightbar,
 trigger or rumble operations return a structured error and do not call the
@@ -79,6 +87,10 @@ P3 additionally emits `game.foreground_changed`, `game.detected`,
 `compatibility.changed`, `game.conflict_detected`, `automation.changed` and
 `synthetic.release`. Events are version 1; clients ignore unknown future event
 types safely.
+P5 additionally emits `exclusive.changed`, `exclusive.recovered`,
+`diagnostics.duplicate_input` and `adaptive_trigger.changed`. `controller.lab`
+also carries Player LED and lightbar effect state. Exclusive ownership tokens
+are never serialized to clients.
 `controller.input` is latest-value telemetry published at no more than about
 30 Hz, even though the core continues its approximately 250 Hz USB read loop
 for touchpad behavior. Subscription queues are bounded and retain the newest
@@ -123,6 +135,12 @@ otherwise the request returns structured `compatibility.unavailable` and the
 previous mode remains unchanged. Conflict diagnostics are process-name
 evidence only, including the caveat that Steam Input may affect a game
 depending on its configuration. No external process is controlled.
+
+Exclusive is a separate capability-gated mode. It requires a verified virtual
+output-report source and session-scoped physical suppression; provider presence
+alone is insufficient. It is OFF by default and duplicate-input risk remains
+true whenever suppression is not verified. Native, remapping and Exclusive
+state are never inferred from stale WebSocket data.
 
 ## P4 product contracts
 
