@@ -11,7 +11,7 @@ mypy source/dualsense_companion
 pytest
 python -m compileall -q source tests
 python -m build --wheel
-python scripts/validate_versions.py --expected 0.4.0-rc.7
+python scripts/validate_versions.py --expected 0.4.0-rc.8
 ```
 
 Headless core/API and the retained GUI are separate entry modes:
@@ -140,6 +140,37 @@ The Games picker is presentation-tested with a mocked Tauri invoke and a
 browser `.exe` fallback. Running/recent candidates remain non-persistent until
 the user saves. Stale runtime values are historical context only. Locale key
 parity and Dark/theme first paint are tested without network access.
+
+## P5.1 Windows Live Dev Bridge
+
+When the checkout runs under WSL on the same Windows machine as the installed
+DS5Forge build, use the development-only bridge to inspect the live loopback
+runtime without exposing a new listener:
+
+```text
+./.venv/bin/python scripts/windows_live_bridge.py snapshot
+./.venv/bin/python scripts/windows_live_bridge.py api state
+./.venv/bin/python scripts/windows_live_bridge.py processes
+./.venv/bin/python scripts/windows_live_bridge.py dualsense
+./.venv/bin/python scripts/windows_live_bridge.py hidhide
+./.venv/bin/python scripts/windows_live_bridge.py ws --count 5 --timeout 5
+```
+
+The bridge reads the existing `127.0.0.1:8765` HTTP/WebSocket surface and uses
+PowerShell only for read-only Windows process/PnP/HidHide inspection. It does
+not change firewall rules, bind a port, install a driver or enable remote
+access. `processes` reports the parent/child process tree because a PyInstaller
+one-file sidecar normally appears as a bootloader process plus its child
+application process; those rows are not automatically evidence of two
+independent cores.
+
+P5.1 physical-input isolation is separate from Exclusive virtual-controller
+ownership. In Remap, an already installed HidHide may explicitly hide the
+currently connected wired DualSense while allowlisting the packaged
+`ds5forge-core.exe`. The operation is transactional, records only DS5Forge-owned
+changes for rollback/recovery and never installs HidHide. Native stays the
+default. HIDMaestro/output-report Exclusive remains unavailable until its own
+provider gates and Windows evidence are complete.
 
 ## P3 Games / automation checks
 

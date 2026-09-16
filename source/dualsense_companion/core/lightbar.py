@@ -35,15 +35,16 @@ class InterruptiblePulseAnimator:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def start(self, state: LightbarState, *, cycles: int = 2) -> None:
+    def start(self, state: LightbarState, *, cycles: int | None = None) -> None:
         self.stop()
         if state.effect not in {"pulse", "slow", "fast"} and state.pulse == "off":
             self.apply(state)
             return
+        bounded_cycles = None if cycles is None else max(1, int(cycles))
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._run,
-            args=(state, max(1, int(cycles))),
+            args=(state, bounded_cycles),
             name="DS5ForgeLightbarPulse",
             daemon=False,
         )
@@ -58,9 +59,11 @@ class InterruptiblePulseAnimator:
         if reset is not None:
             self.apply(reset)
 
-    def _run(self, state: LightbarState, cycles: int) -> None:
-        total = cycles * 2
-        for index in range(total):
+    def _run(self, state: LightbarState, cycles: int | None) -> None:
+        interval = self._frame_interval(state)
+        total = None if cycles is None else cycles * 2
+        index = 0
+        while total is None or index < total:
             if self._stop.is_set():
                 return
             phase = 0.35 + 0.65 * ((index % 2) == 0)
@@ -76,10 +79,19 @@ class InterruptiblePulseAnimator:
                     pulse=state.pulse,
                 )
             )
-            if self._stop.wait(self.interval):
+            index += 1
+            if self._stop.wait(interval):
                 return
         if not self._stop.is_set():
             self.apply(state)
+
+    def _frame_interval(self, state: LightbarState) -> float:
+        mode = state.pulse if state.pulse in {"slow", "fast"} else state.effect
+        if mode == "slow":
+            return self.interval * 2.5
+        if mode == "fast":
+            return max(0.01, self.interval * 0.6)
+        return self.interval
 
     def close(self) -> None:
         self.stop(reset=LightbarState())

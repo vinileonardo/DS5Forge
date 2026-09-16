@@ -197,10 +197,23 @@ def test_lightbar_scaling_and_interruptible_pulse_stop():
     assert scale_rgb(LightbarState(r=200, g=100, b=50, enabled=False)) == (0, 0, 0)
     frames = []
     animator = InterruptiblePulseAnimator(frames.append, interval=0.01)
+    assert animator._frame_interval(LightbarState(pulse="slow")) == pytest.approx(0.025)
+    assert animator._frame_interval(LightbarState(pulse="fast")) == pytest.approx(0.01)
     animator.start(LightbarState(r=10, effect="pulse"), cycles=5)
     time.sleep(0.025)
     animator.stop(reset=LightbarState())
     assert frames[-1] == LightbarState()
+    animator.close()
+
+
+def test_lightbar_pulse_stays_active_until_replaced():
+    frames: list[LightbarState] = []
+    animator = InterruptiblePulseAnimator(frames.append, interval=0.01)
+    animator.start(LightbarState(r=40, pulse="fast"))
+    time.sleep(0.08)
+    animator.stop()
+    assert len(frames) >= 6
+    assert any(frame.intensity < 1.0 for frame in frames)
     animator.close()
 
 

@@ -450,6 +450,33 @@ class DuplicateInputDiagnosticResponse(StrictModel):
     checked_at: float
 
 
+class InputIsolationCapabilityResponse(StrictModel):
+    provider: str
+    installed: bool
+    available: bool
+    version: str | None
+    executable: str | None
+    application_path: str | None
+    device_detected: bool
+    device_instance_path: str | None
+    reason: str | None
+
+
+class InputIsolationStatusResponse(StrictModel):
+    active: bool
+    owned: bool
+    cloak_enabled: bool
+    application_registered: bool
+    device_hidden: bool
+    physical_input_visible: bool
+    double_input_risk: bool
+    device_instance_path: str | None
+    capability: InputIsolationCapabilityResponse
+    reason: str | None
+    last_error: str | None
+    updated_at: float
+
+
 class CompatibilityStateResponse(StrictModel):
     mode: Literal["native", "remap", "virtual"]
     available: bool

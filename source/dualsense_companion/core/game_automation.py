@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Iterable, Sequence
+from dataclasses import replace
 
 from ..diagnostics.logging import get_logger
 from ..domain.errors import DS5ForgeError, ErrorCode
@@ -45,6 +46,75 @@ def evaluate_game_rules(
             )
         )
     return match, tuple(evaluations)
+
+
+def evaluate_running_game_rules(
+    foreground: ForegroundApplication,
+    running: Sequence[ForegroundApplication],
+    games: Sequence[GameDefinition],
+    *,
+    active_game_id: str | None = None,
+) -> tuple[GameMatch | None, tuple[RuleEvaluation, ...]]:
+    """Select the active game from live processes while using foreground as priority.
+
+    Process presence owns lifecycle: Alt+Tab does not deactivate a game whose
+    executable is still alive. Foreground only wins when it matches another
+    configured live game. If no configured game owns the foreground, the
+    current active game is retained while its process remains alive; otherwise
+    registry order provides a deterministic fallback.
+    """
+
+    definitions = tuple(games)
+    foreground_match, _ = evaluate_game_rules(foreground, definitions)
+    live_matches: dict[str, GameMatch] = {}
+    for game in definitions:
+        for observation in running:
+            candidate = game.matches(observation)
+            if candidate.matched:
+                live_matches[game.id.casefold()] = candidate
+                break
+
+    selected: GameMatch | None = None
+    if foreground_match is not None and foreground_match.game_id is not None:
+        live = live_matches.get(foreground_match.game_id.casefold())
+        if live is not None:
+            selected = replace(live, reason="Configured process is running and currently owns foreground priority.")
+
+    if selected is None and active_game_id:
+        live = live_matches.get(active_game_id.casefold())
+        if live is not None:
+            selected = replace(live, reason="Configured process is still running in the background.")
+
+    if selected is None:
+        for game in definitions:
+            live = live_matches.get(game.id.casefold())
+            if live is not None:
+                selected = replace(live, reason="Configured process is running.")
+                break
+
+    evaluations: list[RuleEvaluation] = []
+    selected_id = selected.game_id.casefold() if selected and selected.game_id else None
+    for game in definitions:
+        live = live_matches.get(game.id.casefold())
+        matched = live is not None
+        reason = live.reason if live is not None else "No configured executable for this rule is currently running."
+        if matched:
+            if selected_id == game.id.casefold():
+                reason = selected.reason if selected is not None else reason
+            else:
+                reason = "Configured process is running, but another live game currently has priority."
+        evaluations.append(
+            RuleEvaluation(
+                game_id=game.id,
+                game_name=game.name,
+                matched=matched,
+                reason=reason,
+                action="activate" if selected_id == game.id.casefold() else "none",
+                profile=game.profile if matched else None,
+                compatibility_mode=game.compatibility_mode if matched else None,
+            )
+        )
+    return selected, tuple(evaluations)
 
 
 class ForegroundWorker:

@@ -14,6 +14,10 @@ const apiMock = vi.hoisted(() => ({
   exclusiveStatus: vi.fn(),
   enableExclusive: vi.fn(),
   disableExclusive: vi.fn(),
+  inputIsolationCapabilities: vi.fn(),
+  inputIsolationStatus: vi.fn(),
+  enableInputIsolation: vi.fn(),
+  disableInputIsolation: vi.fn(),
   addGame: vi.fn(),
   updateGame: vi.fn(),
   deleteGame: vi.fn(),
@@ -89,6 +93,39 @@ function exclusiveStatus(overrides: Record<string, unknown> = {}) {
     last_error: null,
     mirrored_sequence: 0,
     updated_at: 0,
+    ...overrides,
+  };
+}
+
+function inputIsolationCapability(overrides: Record<string, unknown> = {}) {
+  return {
+    provider: "HidHide",
+    installed: true,
+    available: true,
+    version: "1.5.230",
+    executable: "C:\\Program Files\\Nefarius Software Solutions\\HidHide\\x64\\HidHideCLI.exe",
+    application_path: "C:\\Users\\Vini\\AppData\\Local\\DS5Forge\\ds5forge-core.exe",
+    device_detected: true,
+    device_instance_path: "HID\\VID_054C&PID_0CE6&MI_03\\8&1121ad8a&0&0000",
+    reason: null,
+    ...overrides,
+  };
+}
+
+function inputIsolationStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    active: false,
+    owned: false,
+    cloak_enabled: false,
+    application_registered: false,
+    device_hidden: false,
+    physical_input_visible: true,
+    double_input_risk: true,
+    device_instance_path: "HID\\VID_054C&PID_0CE6&MI_03\\8&1121ad8a&0&0000",
+    capability: inputIsolationCapability(),
+    reason: "Physical DualSense input remains visible to ordinary applications.",
+    last_error: null,
+    updated_at: 100,
     ...overrides,
   };
 }
@@ -180,6 +217,20 @@ function setupApi() {
   apiMock.gameCandidates.mockResolvedValue([]);
   apiMock.exclusiveCapabilities.mockResolvedValue(exclusiveCapability());
   apiMock.exclusiveStatus.mockResolvedValue(exclusiveStatus());
+  apiMock.inputIsolationCapabilities.mockResolvedValue(inputIsolationCapability());
+  apiMock.inputIsolationStatus.mockResolvedValue(inputIsolationStatus());
+  apiMock.enableInputIsolation.mockResolvedValue(
+    inputIsolationStatus({
+      active: true,
+      owned: true,
+      cloak_enabled: true,
+      application_registered: true,
+      device_hidden: true,
+      physical_input_visible: false,
+      double_input_risk: false,
+    }),
+  );
+  apiMock.disableInputIsolation.mockResolvedValue(inputIsolationStatus());
   apiMock.updateAutomation.mockResolvedValue(makeRuntime().automation);
   apiMock.updateCompatibility.mockResolvedValue(makeRuntime().compatibility);
   apiMock.testGameMatch.mockResolvedValue({
@@ -369,7 +420,41 @@ describe("GamesPage", () => {
     expect(screen.getByRole("heading", { name: "Mapeamentos" })).toBeVisible();
     expect(screen.getByText("Avançado · Mapeamentos e acordes")).toBeInTheDocument();
     expect(screen.getByLabelText("Automação de jogos")).toBeInTheDocument();
+    expect(screen.getByText("O executável corresponde à regra configurada.")).toBeInTheDocument();
+    expect(screen.queryByText("Executable name and configured path matched.")).not.toBeInTheDocument();
     expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe("pt-BR");
+  });
+
+  it("enables HidHide double-input protection only in Remap and reflects verified isolation", async () => {
+    setupApi();
+    model.value = {
+      runtime: {
+        ...makeRuntime(),
+        compatibility: {
+          ...makeRuntime().compatibility,
+          mode: "remap" as const,
+          double_input_risk: true,
+          reason: "Remap adds keyboard/mouse output while the physical controller remains visible.",
+        },
+      },
+      coreStatus: "online",
+      stale: false,
+      loading: false,
+    };
+
+    render(<GamesPage />);
+
+    await waitFor(() => expect(apiMock.inputIsolationCapabilities).toHaveBeenCalled());
+    const toggle = screen.getByLabelText("Isolate physical DualSense");
+    expect(toggle).toBeEnabled();
+    expect(toggle).not.toBeChecked();
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(apiMock.enableInputIsolation).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByLabelText("Isolate physical DualSense")).toBeChecked());
+    expect(
+      screen.getByText("Protection active. The physical controller is hidden from ordinary applications."),
+    ).toBeVisible();
   });
 
   it("keeps the Exclusive toggle actionable only when the complete capability is operational", async () => {
