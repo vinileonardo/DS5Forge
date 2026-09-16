@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.4.0-rc.7 — Release Candidate 7 — 2026-09-16
+
+### P5 compatibility, game intelligence and UX stabilization
+
+- Adds capability-gated Exclusive contracts and transactional coordinator with
+  ownership token, generation, lease-refreshing mirroring, throttled provider
+  heartbeat, an independent bounded watchdog, full input mirroring, rollback,
+  stale-recovery reporting and duplicate-input diagnostics. Exclusive remains
+  OFF until a signed/provenanced Windows provider and physical suppression are
+  validated, and it cannot coexist with Remap/Virtual.
+- Adds the fixed Windows helper boundary for the investigated HIDMaestro +
+  HidHide design with finite request timeouts, stderr deadlock avoidance and
+  guaranteed process termination, without arbitrary shell execution,
+  `pythonnet`, ViGEmBus, downloads or automatic installation.
+- Adds adaptive-trigger arbitration with TTL/watchdog/reset ownership and an
+  explicit per-game `native`/`reactive`/`off` setting. Reactive effects are
+  clearly labeled DS5Forge-generated and driven from the real audio envelope and
+  current input; `game_native` is reserved for real provider output reports,
+  which are not implemented in this source.
+- Applies robust stick calibration to Exclusive virtual mirroring only while
+  Native telemetry stays raw, preserves both pinned pydualsense touch slots/raw
+  diagnostic values, separates RGB lightbar intensity from Player LED intensity
+  (one authoritative software pulse mechanism), and adds interruptible pulse
+  cleanup.
+- Adds running/recent Games candidates, identity-only browser `.exe` fallback,
+  profile dropdown, an app-global `pt-BR`/`en-US` i18n provider that updates the
+  shell and active pages live, stale-state-safe topbar, theme first-paint
+  bootstrap, updater progress copy and Advanced Remote Access placement.
+
+### Validation boundary
+
+Python and frontend source gates are covered by `docs/P5_VALIDATION.md`. Native
+Tauri/Rust, provider, Windows, physical USB, game, loopback audio and packaged
+installer evidence remain `WINDOWS/HARDWARE VALIDATION PENDING`.
+
 All notable changes to DS5Forge will be documented in this file.
 
 The project currently evolves from the upstream `Casliyan/DS5companion` baseline recorded in `UPSTREAM.md`.

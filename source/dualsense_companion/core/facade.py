@@ -12,7 +12,9 @@ from ..diagnostics.health import health_from_snapshot
 from ..diagnostics.logging import get_logger
 from ..domain.errors import CapabilityUnavailableError, ConfigValidationError, DS5ForgeError, ErrorCode
 from ..domain.events import EventType
+from ..domain.exclusive import ExclusiveStatus
 from ..domain.games import (
+    AdaptiveTriggerMode,
     AutomationState,
     CompatibilityMode,
     CompatibilityState,
@@ -34,12 +36,16 @@ from ..domain.models import (
     HealthSnapshot,
     LightbarState,
     MotorSnapshot,
+    PlayerLedState,
     RuntimeSnapshot,
     StickCalibration,
     TriggerPreviewState,
     TriggerState,
+    finite_number,
     normalize_controller_reading,
 )
+from .adaptive_triggers import AdaptiveTriggerEngine, AdaptiveTriggerStatus, ReactiveTriggerAdapter, TriggerSource
+from .calibration import calibrated_sticks
 from .config import (
     ConfigRepository,
     default_controller_profile,
@@ -50,7 +56,9 @@ from .config import (
 from .controller_lab import HapticsTestBench, TriggerPreviewCoordinator
 from .controller_service import ControllerService, LifecycleNotification
 from .event_bus import Subscription
+from .exclusive_input import ExclusiveCoordinator
 from .game_automation import ForegroundWorker, conflict_diagnostics, evaluate_game_rules
+from .game_candidates import GameCandidate, merge_candidates
 from .games_repository import (
     GameNotFoundError,
     GameRegistryRepository,
@@ -59,6 +67,7 @@ from .games_repository import (
     mapping_definitions,
 )
 from .haptics_service import HapticsService
+from .lightbar import InterruptiblePulseAnimator
 from .outputs import OutputManager, RemappingEngine
 from .ports import (
     AudioCaptureFactory,
@@ -103,6 +112,8 @@ class CoreFacade:
         foreground_detector: ForegroundDetector | None = None,
         process_inspector: ProcessInspector | None = None,
         virtual_provider: VirtualControllerProvider | None = None,
+        exclusive_coordinator: ExclusiveCoordinator | None = None,
+        game_candidate_provider: Any | None = None,
         foreground_poll_interval: float = 0.75,
     ) -> None:
         self.config_repository = config_repository or ConfigRepository.default()
@@ -120,11 +131,19 @@ class CoreFacade:
         self._stop_lock = threading.Lock()
         self._lab_lock = threading.RLock()
         self._disconnecting = False
+        self._last_exclusive_state_publish = 0.0
         self._preview_effect = TriggerState()
         self._last_profile_apply: dict[str, Any] | None = None
         self._foreground_detector = foreground_detector
         self._process_inspector = process_inspector
         self._virtual_provider = virtual_provider
+        self._exclusive = exclusive_coordinator or ExclusiveCoordinator()
+        self._exclusive_monitor_stop = threading.Event()
+        self._exclusive_monitor: threading.Thread | None = None
+        self._last_exclusive_published: ExclusiveStatus = self._exclusive.status()
+        self._game_candidate_provider = game_candidate_provider
+        self._recent_candidates: list[GameCandidate] = []
+        self._recent_candidates_limit = 24
 
         initial_error = self.config_repository.last_error.to_snapshot() if self.config_repository.last_error else None
         if initial_error is None and self.games_repository.last_error is not None:
@@ -190,6 +209,7 @@ class CoreFacade:
                 ),
                 changed_at=time.time(),
             ),
+            exclusive=self._exclusive.status(),
         )
         self.store = StateStore(initial)
 
@@ -218,6 +238,12 @@ class CoreFacade:
             on_reading=self._on_reading,
             on_motors=self._on_motors,
         )
+        self._lightbar_animator = InterruptiblePulseAnimator(self._apply_lightbar_frame)
+        self._adaptive_triggers = AdaptiveTriggerEngine(self.controller, output_supported=False, ttl_seconds=1.0)
+        self._reactive_adapter = ReactiveTriggerAdapter()
+        self._audio_envelope = 0.0
+        self._adaptive_trigger_mode = AdaptiveTriggerMode.NATIVE.value
+        self._last_adaptive_status: AdaptiveTriggerStatus = self._adaptive_triggers.status
         self._telemetry = TelemetryPublisher(max_hz=30.0, on_publish=self._on_telemetry)
         self._trigger_preview = TriggerPreviewCoordinator(
             self._apply_trigger_hardware,
@@ -247,6 +273,11 @@ class CoreFacade:
             self._started = True
             self._disconnecting = False
         LOGGER.info("core starting", extra={"event": "core.start"})
+        recovery = self._exclusive.recover()
+        if recovery.performed:
+            self._set_exclusive_status(recovery.status, event_type=EventType.EXCLUSIVE_RECOVERED)
+        else:
+            self._set_exclusive_status(recovery.status)
         self.store.mutate(
             lambda current: replace(
                 current,
@@ -265,6 +296,7 @@ class CoreFacade:
             )
         )
         self.store.publish(EventType.DIAGNOSTIC.value, {"event": "core.started"})
+        self._start_exclusive_monitor()
         self.controller.start()
         if self._foreground_worker is not None:
             self._foreground_worker.start()
@@ -278,6 +310,7 @@ class CoreFacade:
                 self._release_synthetic_outputs("shutdown")
                 self._haptics_bench.stop()
                 self._best_effort_preview_reset(status="reset")
+                self._lightbar_animator.close()
                 self.touchpad.reset()
                 current = self.snapshot()
                 self.store.update(
@@ -295,6 +328,9 @@ class CoreFacade:
                     ),
                 )
                 self._close_virtual_provider()
+                self._stop_exclusive_monitor()
+                self._disable_exclusive(reason="shutdown")
+                self._reset_adaptive_triggers(reason="shutdown")
                 return
             self._started = False
         LOGGER.info("core stopping", extra={"event": "core.stop"})
@@ -304,6 +340,7 @@ class CoreFacade:
         self._release_synthetic_outputs("shutdown")
         self._haptics_bench.stop()
         self._best_effort_preview_reset(status="reset")
+        self._lightbar_animator.close()
         # Stop audio-driven motor writes before neutralizing/stopping the
         # controller. Otherwise the haptics worker can race teardown and write
         # rumble again while ControllerService.stop() is waiting for its thread.
@@ -322,6 +359,9 @@ class CoreFacade:
         )
         self.store.publish(EventType.DIAGNOSTIC.value, {"event": "core.stopped"})
         self._close_virtual_provider()
+        self._stop_exclusive_monitor()
+        self._disable_exclusive(reason="shutdown")
+        self._reset_adaptive_triggers(reason="shutdown")
 
     def snapshot(self) -> RuntimeSnapshot:
         return self.store.get()
@@ -414,6 +454,177 @@ class CoreFacade:
     def input_telemetry(self) -> ControllerTelemetry:
         return self.snapshot().telemetry
 
+    # ------------------------------------------------------------------
+    # P5 Exclusive input and duplicate-input diagnostics
+
+    def exclusive_capability(self) -> dict[str, Any]:
+        return self._exclusive.capability().to_dict()
+
+    def exclusive_status(self) -> dict[str, Any]:
+        return self._exclusive.status().to_dict()
+
+    def enable_exclusive(self) -> dict[str, Any]:
+        with self._compatibility_lock:
+            mode = self.snapshot().compatibility.mode
+            if mode != CompatibilityMode.NATIVE:
+                reason = (
+                    "Exclusive input cannot coexist with Remap or Virtual output. "
+                    "Return to Native before enabling Exclusive."
+                )
+                self._set_exclusive_status(replace(self._exclusive.status(), reason=reason, last_error=reason))
+                raise DS5ForgeError(
+                    ErrorCode.EXCLUSIVE_UNAVAILABLE,
+                    reason,
+                    fields={"compatibility_mode": mode.value},
+                )
+            try:
+                status = self._exclusive.enable()
+            except DS5ForgeError:
+                self._set_exclusive_status(self._exclusive.status())
+                raise
+        self._set_exclusive_status(status)
+        return status.to_dict()
+
+    def disable_exclusive(self, *, reason: str = "manual") -> dict[str, Any]:
+        return self._disable_exclusive(reason=reason).to_dict()
+
+    def exclusive_heartbeat(self) -> dict[str, Any]:
+        status = self._exclusive.heartbeat()
+        self._set_exclusive_status(status)
+        return status.to_dict()
+
+    def duplicate_input_diagnostics(self) -> dict[str, Any]:
+        diagnostic = self._exclusive.duplicate_input_diagnostic()
+        self.store.publish(EventType.DUPLICATE_INPUT.value, {"diagnostic": diagnostic})
+        return diagnostic.to_dict()
+
+    def _set_exclusive_status(
+        self, status: ExclusiveStatus, *, event_type: EventType = EventType.EXCLUSIVE_CHANGED
+    ) -> None:
+        self._last_exclusive_published = status
+        self.store.update(exclusive=status)
+        self._last_exclusive_state_publish = time.monotonic()
+        self.store.publish(event_type.value, {"exclusive": status})
+
+    def _disable_exclusive(self, *, reason: str) -> ExclusiveStatus:
+        status = self._exclusive.disable(reason=reason)
+        self._set_exclusive_status(status)
+        return status
+
+    def _start_exclusive_monitor(self) -> None:
+        if self._exclusive_monitor is not None and self._exclusive_monitor.is_alive():
+            return
+        self._exclusive_monitor_stop.clear()
+        self._exclusive_monitor = threading.Thread(
+            target=self._exclusive_monitor_loop,
+            name="DS5ForgeExclusiveWatchdog",
+            daemon=False,
+        )
+        self._exclusive_monitor.start()
+
+    def _stop_exclusive_monitor(self, *, join_timeout: float = 2.0) -> None:
+        self._exclusive_monitor_stop.set()
+        thread = self._exclusive_monitor
+        self._exclusive_monitor = None
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=join_timeout)
+
+    def _exclusive_monitor_loop(self) -> None:
+        # Runs independently of the controller read callback so a stalled
+        # read/mirror path still expires the Exclusive lease.
+        while not self._exclusive_monitor_stop.wait(0.2):
+            try:
+                status = self._exclusive.tick()
+            except Exception:
+                LOGGER.exception("exclusive watchdog step failed", extra={"event": "exclusive.watchdog"})
+                continue
+            if status != self._last_exclusive_published:
+                self._set_exclusive_status(status)
+
+    # ------------------------------------------------------------------
+    # P5 runtime-reactive adaptive triggers (explicit per-game ownership)
+
+    def adaptive_trigger_status(self) -> dict[str, Any]:
+        return self._adaptive_triggers.status.to_dict()
+
+    def _apply_adaptive_trigger_mode(self, game: GameDefinition) -> None:
+        mode = game.adaptive_trigger_mode
+        value = mode.value if isinstance(mode, AdaptiveTriggerMode) else str(mode)
+        previous = self._adaptive_trigger_mode
+        self._adaptive_trigger_mode = value
+        # Automatic game profile application must never overwrite saved static
+        # trigger effects. Ownership is resolved exclusively here:
+        #   native   -> leave native game behavior alone, clearing only an
+        #               effect DS5Forge previously generated;
+        #   off      -> actively neutralize DS5Forge trigger output;
+        #   reactive -> start from neutral and let the generated effect take
+        #               over from real runtime signal.
+        # None of these populate GAME_NATIVE with invented telemetry.
+        force = value in {AdaptiveTriggerMode.OFF.value, AdaptiveTriggerMode.REACTIVE.value}
+        status = self._adaptive_triggers.reset(reason=f"mode:{value}", force=force)
+        self._publish_adaptive_trigger_status(status)
+        if value != previous:
+            LOGGER.info(
+                "adaptive trigger mode changed",
+                extra={"event": "adaptive_triggers.mode", "mode": value, "game_id": game.id},
+            )
+
+    def _reset_adaptive_triggers(self, *, reason: str) -> None:
+        if self._adaptive_trigger_mode == AdaptiveTriggerMode.NATIVE.value:
+            # Nothing was generated for native games; avoid needless hardware
+            # writes while still clearing any prior reactive session.
+            if self._adaptive_triggers.status.source == TriggerSource.OFF:
+                return
+        self._adaptive_trigger_mode = AdaptiveTriggerMode.NATIVE.value
+        self._audio_envelope = 0.0
+        status = self._adaptive_triggers.reset(reason=reason)
+        self._publish_adaptive_trigger_status(status)
+
+    def _update_reactive_triggers(self, input_state: ControllerInput) -> None:
+        if self._adaptive_trigger_mode != AdaptiveTriggerMode.REACTIVE.value:
+            return
+        if not self._adaptive_triggers.output_supported:
+            return
+        state = self._reactive_adapter.from_envelope(
+            input_state=input_state,
+            audio_envelope=self._audio_envelope,
+        )
+        if state is None:
+            status = self._adaptive_triggers.clear_source(TriggerSource.REACTIVE, reason="no_signal")
+        else:
+            status = self._adaptive_triggers.set_reactive(state, ttl_seconds=0.5)
+        self._publish_adaptive_trigger_status(status)
+
+    def _publish_adaptive_trigger_status(self, status: AdaptiveTriggerStatus) -> None:
+        previous = self._last_adaptive_status
+        if (
+            previous.source == status.source
+            and previous.generated_effect == status.generated_effect
+            and previous.state == status.state
+        ):
+            self._last_adaptive_status = status
+            return
+        self._last_adaptive_status = status
+        self.store.publish(EventType.ADAPTIVE_TRIGGER_CHANGED.value, {"adaptive_trigger": status.to_dict()})
+
+    def _on_audio_envelope(self, level: float) -> None:
+        self._audio_envelope = max(0.0, min(1.0, float(level)))
+
+    def _calibrated_mirror_input(self, input_state: ControllerInput) -> ControllerInput:
+        """Apply the configured center/deadzone to Exclusive mirroring only.
+
+        Native telemetry and raw stick values are deliberately unchanged.
+        """
+
+        # The configured calibration is always applied for Exclusive mirroring,
+        # including the default deadzone. Comparing against a fresh default
+        # object would silently skip that default deadzone.
+        calibration = self.snapshot().stick_calibration
+        sticks = calibrated_sticks(input_state.sticks, calibration, mode="exclusive")
+        if sticks == input_state.sticks:
+            return input_state
+        return replace(input_state, sticks=sticks)
+
     def lightbar_state(self) -> LightbarState:
         with self._lab_lock:
             try:
@@ -428,7 +639,18 @@ class CoreFacade:
         _validate_lightbar_state(state)
         with self._lab_lock:
             try:
-                self.controller.set_lightbar(state)
+                self._lightbar_animator.stop()
+                pulse_requested = state.enabled and (
+                    state.effect in {"pulse", "slow", "fast"} or state.pulse in {"slow", "fast"}
+                )
+                if pulse_requested:
+                    # The software animator is the single authoritative pulse
+                    # mechanism; the adapter receives pulse="off" so a hardware
+                    # pulse cannot fight the frames.
+                    self.controller.set_lightbar(replace(state, pulse="off"))
+                    self._lightbar_animator.start(state)
+                else:
+                    self.controller.set_lightbar(replace(state, pulse="off"))
             except DS5ForgeError as exc:
                 if self._best_effort_reset_lightbar():
                     self.store.update(lightbar=LightbarState())
@@ -447,6 +669,7 @@ class CoreFacade:
     def reset_lightbar(self) -> LightbarState:
         with self._lab_lock:
             try:
+                self._lightbar_animator.stop()
                 self.controller.reset_lightbar()
             except DS5ForgeError as exc:
                 self._record_error(exc)
@@ -455,6 +678,53 @@ class CoreFacade:
             snapshot = self.store.update(lightbar=state)
             self.store.publish(EventType.LAB.value, {"kind": "lightbar.reset", "state": snapshot.to_dict()["lightbar"]})
             return snapshot.lightbar
+
+    def _apply_lightbar_frame(self, state: LightbarState) -> None:
+        try:
+            # Never let an animated frame re-arm a hardware pulse.
+            self.controller.set_lightbar(replace(state, pulse="off"))
+        except DS5ForgeError as exc:
+            self._record_error(exc)
+            self.store.update(lightbar=LightbarState())
+            self._lightbar_animator.stop()
+
+    def player_led_state(self) -> PlayerLedState:
+        with self._lab_lock:
+            try:
+                state = self.controller.get_player_leds()
+            except DS5ForgeError as exc:
+                self._record_error(exc)
+                raise
+            snapshot = self.store.update(player_leds=state)
+            return snapshot.player_leds
+
+    def apply_player_leds(self, state: PlayerLedState) -> PlayerLedState:
+        if not isinstance(state, PlayerLedState):
+            raise ConfigValidationError(fields={"player_leds": "must be a PlayerLedState"})
+        with self._lab_lock:
+            try:
+                self.controller.set_player_leds(state)
+            except DS5ForgeError as exc:
+                self._record_error(exc)
+                raise
+            snapshot = self.store.update(player_leds=state)
+            self.store.publish(
+                EventType.LAB.value,
+                {"kind": "player_leds.applied", "player_leds": snapshot.player_leds},
+            )
+            return snapshot.player_leds
+
+    def reset_player_leds(self) -> PlayerLedState:
+        with self._lab_lock:
+            try:
+                self.controller.reset_player_leds()
+            except DS5ForgeError as exc:
+                self._record_error(exc)
+                raise
+            state = PlayerLedState()
+            snapshot = self.store.update(player_leds=state)
+            self.store.publish(EventType.LAB.value, {"kind": "player_leds.reset", "player_leds": state})
+            return snapshot.player_leds
 
     def trigger_state(self) -> TriggerState:
         return self.snapshot().triggers
@@ -662,6 +932,13 @@ class CoreFacade:
             swipe_enabled=normalized["touchpad"]["swipe_enabled"],
             swipe_threshold=normalized["touchpad"]["swipe_threshold"],
         )
+        # Automatic (game-driven) profile application never writes the saved
+        # static adaptive-trigger effect. Trigger ownership for an automatic
+        # profile is resolved by `_apply_adaptive_trigger_mode`, so `native`
+        # leaves hardware untouched, `off` neutralizes DS5Forge output and
+        # `reactive` starts from a neutral generated session. Manual profile
+        # application keeps the existing Controller Lab behavior.
+        apply_profile_triggers = source == ProfileOrigin.MANUAL
         unsupported: list[str] = []
         with self._lab_lock:
             self._release_synthetic_outputs("profile_change")
@@ -678,10 +955,11 @@ class CoreFacade:
                     self.controller.set_lightbar(lightbar)
                 else:
                     unsupported.append("lightbar")
-                if connected and _capability_enabled(capabilities, "adaptive_triggers"):
-                    self.controller.set_triggers(triggers)
-                else:
-                    unsupported.append("triggers")
+                if apply_profile_triggers:
+                    if connected and _capability_enabled(capabilities, "adaptive_triggers"):
+                        self.controller.set_triggers(triggers)
+                    else:
+                        unsupported.append("triggers")
             except DS5ForgeError as exc:
                 # A profile is an atomic command from the user's point of
                 # view. If a later supported output fails, return every
@@ -703,7 +981,7 @@ class CoreFacade:
             snapshot = self.store.update(
                 active_profile=profile_name,
                 lightbar=lightbar if "lightbar" not in unsupported else self.snapshot().lightbar,
-                triggers=triggers if "triggers" not in unsupported else TriggerState(),
+                triggers=triggers if apply_profile_triggers and "triggers" not in unsupported else TriggerState(),
                 stick_calibration=sticks,
                 gesture_config=gestures,
                 automation=replace(
@@ -777,6 +1055,68 @@ class CoreFacade:
     def games(self) -> list[dict[str, Any]]:
         with self._games_lock:
             return copy.deepcopy(self._games_config["games"])
+
+    def game_candidates(self) -> list[dict[str, Any]]:
+        """Return best-effort running/recent candidates without persistence.
+
+        The "recent" set is a bounded in-memory list of foreground observations
+        observed during this core session. This is not OS-wide running-process
+        discovery.
+        """
+
+        provider = self._game_candidate_provider
+        foreground = self.snapshot().foreground
+        running = (
+            [
+                GameCandidate(
+                    executable_name=foreground.executable_name,
+                    executable_path=foreground.executable_path,
+                    pid=foreground.pid,
+                    title=foreground.title,
+                    source="running",
+                    observed_at=foreground.observed_at,
+                )
+            ]
+            if foreground.available and foreground.executable_name
+            else []
+        )
+        with self._games_lock:
+            recent = list(self._recent_candidates)
+        try:
+            if provider is not None:
+                running = [*provider.running(), *running]
+                recent = [*provider.recent(), *recent]
+        except Exception as exc:
+            self._record_error(
+                DS5ForgeError(
+                    ErrorCode.FOREGROUND_UNAVAILABLE,
+                    "Game candidate discovery is unavailable.",
+                    detail=str(exc),
+                )
+            )
+        return [item.to_dict() for item in merge_candidates(running, recent)]
+
+    def _remember_candidate(self, foreground: ForegroundApplication) -> None:
+        name = (foreground.executable_name or "").strip()
+        if not foreground.available or not name:
+            return
+        candidate = GameCandidate(
+            executable_name=name,
+            executable_path=foreground.executable_path,
+            pid=foreground.pid,
+            title=foreground.title,
+            source="recent",
+            observed_at=foreground.observed_at or time.time(),
+        )
+        key = ((candidate.executable_path or "").casefold(), candidate.executable_name.casefold())
+        with self._games_lock:
+            self._recent_candidates = [
+                item
+                for item in self._recent_candidates
+                if ((item.executable_path or "").casefold(), item.executable_name.casefold()) != key
+            ]
+            self._recent_candidates.insert(0, candidate)
+            del self._recent_candidates[self._recent_candidates_limit :]
 
     def list_games(self) -> list[dict[str, Any]]:
         return self.games()
@@ -1021,6 +1361,7 @@ class CoreFacade:
     def _on_foreground_observation(self, foreground: ForegroundApplication, changed: bool) -> None:
         previous = self.snapshot().foreground
         self.store.update(foreground=foreground)
+        self._remember_candidate(foreground)
         if changed:
             self.store.publish(
                 EventType.GAME_FOREGROUND_CHANGED.value,
@@ -1085,8 +1426,10 @@ class CoreFacade:
             if mode_changed:
                 self._set_compatibility_mode(game.compatibility_mode, manual=False, persist=False)
             self.apply_controller_profile(profile, name=game.profile, source=ProfileOrigin.AUTOMATIC)
+            self._apply_adaptive_trigger_mode(game)
             self._remapper.set_game_context(game.id)
         except DS5ForgeError as exc:
+            self._reset_adaptive_triggers(reason="activation_failed")
             if mode_changed and self.snapshot().compatibility.mode != rollback_mode:
                 try:
                     self._set_compatibility_mode(rollback_mode, manual=False, persist=False)
@@ -1198,8 +1541,10 @@ class CoreFacade:
         automation = current.automation
         game_id = automation.active_game_id
         if game_id is None:
+            self._reset_adaptive_triggers(reason=reason)
             self._release_synthetic_outputs(reason)
             return
+        self._reset_adaptive_triggers(reason=reason)
         self._release_synthetic_outputs(reason)
         self._remapper.set_game_context(None, release=False)
         policy = ExitPolicy.KEEP_CURRENT if automation.manual_override else automation.exit_policy
@@ -1290,6 +1635,10 @@ class CoreFacade:
 
     def _set_compatibility_mode_locked(self, mode: CompatibilityMode, *, manual: bool, persist: bool) -> None:
         self._ensure_compatibility_available(mode)
+        if mode != CompatibilityMode.NATIVE and self.snapshot().exclusive.enabled:
+            # Exclusive owns physical suppression; never let Remap/Virtual run
+            # at the same time. Disabling first keeps the teardown deterministic.
+            self._disable_exclusive(reason="compatibility_mode_change")
         current = self.snapshot().compatibility
         if current.mode == mode:
             if manual:
@@ -1484,6 +1833,11 @@ class CoreFacade:
 
     def _on_connected(self, adapter: ControllerAdapter) -> None:
         self._disconnecting = False
+        self._lightbar_animator.stop()
+        if self.snapshot().exclusive.enabled:
+            self._disable_exclusive(reason="controller_reconnected")
+        else:
+            self._set_exclusive_status(self._exclusive.status())
         self._release_synthetic_outputs("controller_connected")
         # Reconnects begin from a known neutral trigger/output state. The
         # adapter is still owned by ControllerService at this point.
@@ -1492,6 +1846,9 @@ class CoreFacade:
         except DS5ForgeError as exc:
             self._record_error(exc)
         self._best_effort_reset_triggers()
+        capabilities = self._active_capabilities()
+        self._adaptive_triggers.set_output_supported(bool(getattr(capabilities, "adaptive_triggers", False)))
+        self._reset_adaptive_triggers(reason="controller_connected")
         self._telemetry.reset()
         self.touchpad.set_enabled(self.snapshot().touchpad_enabled)
         self._stop_haptics()
@@ -1502,6 +1859,7 @@ class CoreFacade:
             capture_factory=self._capture_factory,
             reload_event=self._reload_audio,
             on_audio=self._on_audio,
+            on_envelope=self._on_audio_envelope,
             on_error=self._record_error,
         )
         self._haptics.start()
@@ -1516,6 +1874,18 @@ class CoreFacade:
                 LOGGER.warning(
                     "lightbar state could not be read", extra={"event": "controller.lightbar_read", "error": str(exc)}
                 )
+        player_leds = self.snapshot().player_leds
+        player_getter = getattr(adapter, "get_player_leds", None)
+        if callable(player_getter):
+            try:
+                candidate = player_getter()
+                if isinstance(candidate, PlayerLedState):
+                    player_leds = candidate
+            except Exception as exc:
+                LOGGER.warning(
+                    "player LED state could not be read",
+                    extra={"event": "controller.player_led_read", "error": str(exc)},
+                )
         self.store.mutate(
             lambda current: replace(
                 current,
@@ -1525,6 +1895,7 @@ class CoreFacade:
                 input=ControllerInput(),
                 telemetry=ControllerTelemetry(),
                 lightbar=lightbar,
+                player_leds=player_leds,
                 triggers=TriggerState(),
                 haptics_test=None,
                 health=replace(current.health, subsystems={**current.health.subsystems, "audio": "starting"}),
@@ -1533,12 +1904,17 @@ class CoreFacade:
 
     def _on_disconnected(self) -> None:
         self._disconnecting = True
+        self._lightbar_animator.stop()
+        self._disable_exclusive(reason="controller_disconnected")
+        self._reset_adaptive_triggers(reason="controller_disconnected")
+        self._adaptive_triggers.set_output_supported(False)
         self._release_synthetic_outputs("controller_disconnected")
         try:
             self._trigger_preview.reset(status="disconnect")
         except DS5ForgeError as exc:
             self._record_error(exc)
         self._best_effort_reset_triggers()
+        self._best_effort_reset_player_leds()
         self._telemetry.reset()
         self._haptics_bench.stop()
         self._stop_haptics()
@@ -1551,6 +1927,7 @@ class CoreFacade:
                 input=ControllerInput(),
                 telemetry=ControllerTelemetry(),
                 triggers=TriggerState(),
+                player_leds=PlayerLedState(),
                 haptics_test=None,
                 audio=AudioSnapshot(status="stopped"),
                 health=replace(current.health, subsystems={**current.health.subsystems, "audio": "stopped"}),
@@ -1561,6 +1938,20 @@ class CoreFacade:
         # Touch/button input needs the upstream 250 Hz cadence, while battery
         # telemetry should only publish when it actually changes.
         reading = normalize_controller_reading(reading)
+        if self.snapshot().exclusive.enabled:
+            try:
+                mirror_input = self._calibrated_mirror_input(reading.input)
+                if mirror_input is reading.input:
+                    mirrored = reading
+                else:
+                    mirrored = replace(reading, input=mirror_input)
+                status = self._exclusive.mirror_reading(mirrored)
+                now = time.monotonic()
+                if now - self._last_exclusive_state_publish >= 1.0 / 30.0:
+                    self._set_exclusive_status(status)
+            except DS5ForgeError as exc:
+                self._record_error(exc)
+        self._update_reactive_triggers(reading.input)
         self.touchpad.handle(reading.input)
         with self._compatibility_lock:
             if self.snapshot().compatibility.mode == CompatibilityMode.REMAP:
@@ -1682,6 +2073,19 @@ class CoreFacade:
             return False
         return True
 
+    def _best_effort_reset_player_leds(self) -> bool:
+        if not _capability_enabled(self._active_capabilities(), "lightbar"):
+            return False
+        try:
+            self.controller.reset_player_leds()
+        except DS5ForgeError as exc:
+            LOGGER.error(
+                "best-effort Player LED reset failed",
+                extra={"event": "controller.player_led_reset", "error_code": exc.code.value},
+            )
+            return False
+        return True
+
     def _active_capabilities(self) -> Any:
         adapter = self.controller.adapter
         return getattr(adapter, "capabilities", self.snapshot().capabilities)
@@ -1723,6 +2127,7 @@ class CoreFacade:
             capture_factory=self._capture_factory,
             reload_event=self._reload_audio,
             on_audio=self._on_audio,
+            on_envelope=self._on_audio_envelope,
             on_error=self._record_error,
         )
         self._haptics.start()
@@ -1754,7 +2159,13 @@ def _validate_lightbar_state(state: LightbarState) -> None:
         or isinstance(state.brightness, bool)
     ):
         raise ConfigValidationError(fields={"lightbar": "enabled and brightness have invalid types"})
-    if not 0 <= state.brightness <= 2 or state.pulse not in {"off", "slow", "fast"}:
+    if (
+        not 0 <= state.brightness <= 2
+        or state.pulse not in {"off", "slow", "fast"}
+        or state.effect not in {"steady", "pulse", "slow", "fast"}
+        or not finite_number(state.intensity)
+        or not 0 <= state.intensity <= 1
+    ):
         raise ConfigValidationError(fields={"lightbar": "brightness or pulse is invalid"})
 
 

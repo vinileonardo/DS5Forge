@@ -205,6 +205,19 @@ select:focus-visible {
   gap: 10px;
   margin-left: auto;
 }
+.topbar-context {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.topbar-context span + span::before {
+  content: "·";
+  margin-right: 9px;
+  color: var(--border-strong);
+}
 .status-pill {
   display: inline-flex;
   align-items: center;
@@ -281,6 +294,18 @@ select:focus-visible {
   width: min(1180px, 100%);
   margin: 0 auto;
   padding: 42px;
+}
+.settings-advanced {
+  display: grid;
+  gap: 12px;
+}
+.settings-advanced > summary {
+  cursor: pointer;
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  list-style-position: inside;
 }
 .page-header {
   display: flex;
@@ -1329,6 +1354,9 @@ h3 {
     text-overflow: ellipsis;
   }
   .global-status .status-pill:last-child {
+    display: none;
+  }
+  .topbar-context {
     display: none;
   }
   .global-banner,

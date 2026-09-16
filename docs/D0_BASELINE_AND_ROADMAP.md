@@ -112,7 +112,7 @@ O shell desktop deve reutilizar o mesmo frontend web e conversar com o mesmo cor
 9. Mudanças de DSP/haptics precisam de testes determinísticos e benchmarks.
 10. P0–P4 não devem introduzir Bluetooth/wireless por acidente.
 
-## 6. Roadmap em cinco sprints grandes
+## 6. Roadmap em seis sprints grandes
 
 ### P0 — Foundation / Core Authority
 
@@ -240,6 +240,34 @@ Gate P4:
 - release reproduzível por CI;
 - documentação de troubleshooting e recovery.
 
+### P5 — Compatibility / Game Intelligence / UX Stabilization
+
+P5 preserves Native as the default and keeps the USB/wired-only boundary. It
+adds a capability-gated Exclusive coordinator, investigated through a fixed
+HIDMaestro + HidHide helper boundary, without installing a provider or adding
+ViGEmBus. The coordinator mirrors complete state, owns token/generation/
+heartbeat cleanup and rolls back if virtual output or physical suppression
+fails. `double_input_risk=true` remains visible until suppression and Windows
+validation are proven.
+
+P5 also separates adaptive-trigger arbitration from Controller Lab, adds
+running/recent game candidates and a native executable picker, stabilizes stale
+topbar/profile/mode trust states, adds typed offline `pt-BR`/`en-US` i18n and
+first-paint theme bootstrap, keeps Remote Access under Settings → Advanced,
+and separates RGB lightbar intensity from Player LEDs. See
+[`P5_UX_SPEC.md`](P5_UX_SPEC.md),
+[`ADR_P5_EXCLUSIVE_INPUT_PROVIDER.md`](ADR_P5_EXCLUSIVE_INPUT_PROVIDER.md) and
+[`P5_VALIDATION.md`](P5_VALIDATION.md).
+
+Gate P5:
+
+- Python/frontend source gates and contract tests are green;
+- Tauri/Rust checks pass on the native Windows toolchain;
+- no Bluetooth/wireless/provider installation is introduced;
+- real Windows/provider, physical DualSense, game, WASAPI loopback and
+  packaged lifecycle evidence is separately recorded, otherwise the handoff
+  remains `WINDOWS/HARDWARE VALIDATION PENDING`.
+
 ## 7. D0 — ponto de partida
 
 D0 não é uma sprint de feature. É o marco de preparação antes da execução P0.
@@ -250,7 +278,7 @@ D0 está pronto quando:
 - [ ] remote `origin` aponta para `vinileonardo/DS5Forge`;
 - [ ] remote `upstream` aponta para `Casliyan/DS5companion`;
 - [ ] README do DS5Forge deixa claro o escopo wired-first;
-- [ ] roadmap P0–P4 está versionado;
+- [ ] roadmap P0–P5 está versionado;
 - [ ] instruções para agentes estão versionadas;
 - [ ] baseline pode ser instalado/executado no Windows a partir do source;
 - [ ] smoke checklist inicial existe;

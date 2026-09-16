@@ -27,6 +27,10 @@ class EventType(StrEnum):
     GAME_CONFLICT_DETECTED = "game.conflict_detected"
     AUTOMATION_CHANGED = "automation.changed"
     SYNTHETIC_RELEASE = "synthetic.release"
+    EXCLUSIVE_CHANGED = "exclusive.changed"
+    EXCLUSIVE_RECOVERED = "exclusive.recovered"
+    DUPLICATE_INPUT = "diagnostics.duplicate_input"
+    ADAPTIVE_TRIGGER_CHANGED = "adaptive_trigger.changed"
 
 
 @dataclass(frozen=True, slots=True)

@@ -15,6 +15,7 @@ from types import MappingProxyType
 from typing import Any, ClassVar
 
 from .errors import ErrorCode
+from .exclusive import ExclusiveStatus
 from .games import (
     AutomationState,
     CompatibilityState,
@@ -50,6 +51,7 @@ class ControllerCapabilities:
     microphone_button: bool = True
     lightbar: bool = True
     adaptive_triggers: bool = False
+    adaptive_trigger_output_reports: bool = False
     availability: ABCMapping[str, CapabilityAvailability] = field(default_factory=dict)
 
     _NAMES: ClassVar[tuple[str, ...]] = (
@@ -59,6 +61,7 @@ class ControllerCapabilities:
         "microphone_button",
         "lightbar",
         "adaptive_triggers",
+        "adaptive_trigger_output_reports",
     )
 
     def __post_init__(self) -> None:
@@ -69,6 +72,7 @@ class ControllerCapabilities:
             "microphone_button": self.microphone_button,
             "lightbar": self.lightbar,
             "adaptive_triggers": self.adaptive_triggers,
+            "adaptive_trigger_output_reports": self.adaptive_trigger_output_reports,
         }
         supplied = dict(self.availability)
         normalized = {
@@ -101,6 +105,7 @@ class ControllerCapabilities:
             microphone_button=False,
             lightbar=False,
             adaptive_triggers=False,
+            adaptive_trigger_output_reports=False,
             availability=availability,
         )
 
@@ -125,6 +130,9 @@ class BatterySnapshot:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "level", max(0, min(100, _safe_int(self.level, 0))))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"level": self.level, "charging": self.charging}
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,11 +209,15 @@ class TouchPoint:
     active: bool = False
     x: float = 0.0
     y: float = 0.0
+    contact_id: int | None = None
+    raw: ABCMapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "active", bool(self.active))
         object.__setattr__(self, "x", _finite_or_zero(self.x))
         object.__setattr__(self, "y", _finite_or_zero(self.y))
+        object.__setattr__(self, "contact_id", _safe_int(self.contact_id, 0) if self.contact_id is not None else None)
+        object.__setattr__(self, "raw", MappingProxyType(dict(self.raw)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -382,6 +394,8 @@ class LightbarState:
     enabled: bool = True
     brightness: int = 2
     pulse: str = "off"
+    intensity: float = 1.0
+    effect: str = "steady"
 
     def __post_init__(self) -> None:
         for name in ("r", "g", "b"):
@@ -389,6 +403,8 @@ class LightbarState:
         object.__setattr__(self, "enabled", bool(self.enabled))
         object.__setattr__(self, "brightness", max(0, min(2, int(self.brightness))))
         object.__setattr__(self, "pulse", str(self.pulse))
+        object.__setattr__(self, "intensity", _clamp_zero_one(self.intensity))
+        object.__setattr__(self, "effect", str(self.effect).lower())
 
     @property
     def red(self) -> int:
@@ -401,6 +417,15 @@ class LightbarState:
     @property
     def blue(self) -> int:
         return self.b
+
+    @property
+    def visible_intensity(self) -> float:
+        return self.intensity if self.enabled else 0.0
+
+    @property
+    def scaled_rgb(self) -> tuple[int, int, int]:
+        intensity = self.visible_intensity
+        return tuple(max(0, min(255, round(channel * intensity))) for channel in (self.r, self.g, self.b))  # type: ignore[return-value]
 
     def to_dict(self) -> dict[str, Any]:
         return _jsonable(self)
@@ -496,6 +521,21 @@ class StickCalibration:
 
 
 @dataclass(frozen=True, slots=True)
+class PlayerLedState:
+    """Player LEDs are a separate output from the RGB lightbar."""
+
+    enabled: bool = True
+    intensity: float = 1.0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "enabled", bool(self.enabled))
+        object.__setattr__(self, "intensity", _clamp_zero_one(self.intensity))
+
+    def to_dict(self) -> dict[str, Any]:
+        return _jsonable(self)
+
+
+@dataclass(frozen=True, slots=True)
 class GestureConfig:
     enabled: bool = True
     two_finger_scroll: bool = True
@@ -543,6 +583,7 @@ class RuntimeSnapshot:
     input: ControllerInput = field(default_factory=ControllerInput)
     telemetry: ControllerTelemetry = field(default_factory=ControllerTelemetry)
     lightbar: LightbarState = field(default_factory=LightbarState)
+    player_leds: PlayerLedState = field(default_factory=PlayerLedState)
     triggers: TriggerState = field(default_factory=TriggerState)
     haptics_test: HapticsTestRun | None = None
     stick_calibration: StickCalibration = field(default_factory=StickCalibration)
@@ -561,6 +602,7 @@ class RuntimeSnapshot:
     compatibility: CompatibilityState = field(default_factory=CompatibilityState)
     synthetic_outputs: SyntheticOutputState = field(default_factory=SyntheticOutputState)
     conflicts: tuple[ConflictDiagnostic, ...] = ()
+    exclusive: ExclusiveStatus = field(default_factory=ExclusiveStatus)
 
     @classmethod
     def initial(cls, *, touchpad_enabled: bool = True, now: float = 0.0) -> RuntimeSnapshot:
@@ -680,7 +722,26 @@ def _normalize_touch(value: Any) -> TouchPoint:
         active=bool(_read_value(value, "active", "isActive", default=False)),
         x=_finite_or_zero(_read_value(value, "x", "X", default=0.0)),
         y=_finite_or_zero(_read_value(value, "y", "Y", default=0.0)),
+        contact_id=_read_value(value, "contact_id", "id", "Id", "ID", default=None),
+        raw=_raw_touch(value),
     )
+
+
+def _raw_touch(value: Any) -> dict[str, Any]:
+    """Keep a bounded diagnostic copy of the actual adapter touch object."""
+
+    names = ("active", "isActive", "x", "X", "y", "Y", "id", "Id", "ID", "contact_id")
+    raw: dict[str, Any] = {}
+    if isinstance(value, ABCMapping):
+        for name in names:
+            if name in value and isinstance(value[name], (str, int, float, bool, type(None))):
+                raw[name] = value[name]
+        return raw
+    for name in names:
+        candidate = getattr(value, name, None)
+        if isinstance(candidate, (str, int, float, bool, type(None))):
+            raw[name] = candidate
+    return raw
 
 
 def normalize_controller_input(value: Any) -> ControllerInput:

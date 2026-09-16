@@ -1,4 +1,4 @@
-# P0/P1/P2/P3 development and verification
+# P0–P5 development and verification
 
 Python 3.12.x is the required P0 development/build runtime. From the repository root:
 
@@ -11,6 +11,7 @@ mypy source/dualsense_companion
 pytest
 python -m compileall -q source tests
 python -m build --wheel
+python scripts/validate_versions.py --expected 0.4.0-rc.7
 ```
 
 Headless core/API and the retained GUI are separate entry modes:
@@ -113,6 +114,33 @@ rejection, capability-disabled no-call behavior, trigger timeout/cancel and
 reconnect neutralization, bounded haptics tests, full-profile validation before
 apply, atomic writes and state-preserving rejected imports.
 
+## P5 compatibility and UX checks
+
+The P5 source gates are recorded in [`P5_VALIDATION.md`](P5_VALIDATION.md).
+Exclusive tests must use injected deterministic providers and must assert that
+the default capability is unavailable, failed suppression rolls back virtual
+state, watchdog expiry exposes physical input and duplicate-input risk, and
+ownership tokens never leave the core. Do not install HIDMaestro, HidHide or a
+driver during a Linux test run.
+
+Adaptive trigger tests must exercise native > telemetry > reactive arbitration,
+TTL expiry, coalescing and Off reset, and facade-level per-game
+`native`/`reactive`/`off` behavior driven from the real audio envelope and
+current input. `game_native` is reserved for real virtual-provider
+output-report feedback, which is not implemented in this source; do not invent
+telemetry at that priority. Lightbar tests must keep RGB intensity independent
+from Player LED intensity, prove `enabled` maps to zero output while preserving
+saved RGB, and stop the single authoritative software pulse worker before
+adapter teardown. Calibration tests must prove Exclusive mirroring receives
+calibrated sticks while Native telemetry stays raw. Touch tests must use both
+`trackPadTouch0` and `trackPadTouch1` fields from the pinned pydualsense
+surface.
+
+The Games picker is presentation-tested with a mocked Tauri invoke and a
+browser `.exe` fallback. Running/recent candidates remain non-persistent until
+the user saves. Stale runtime values are historical context only. Locale key
+parity and Dark/theme first paint are tested without network access.
+
 ## P3 Games / automation checks
 
 The Games page is at `/games`. Add rules with one or more executable names,
@@ -146,7 +174,9 @@ Run the complete P3 evidence record in [`P3_VALIDATION.md`](P3_VALIDATION.md).
 - P2/P3 evidence: record separate automated Linux, frontend, Windows build,
   physical USB and limitation sections in `docs/P2_VALIDATION.md`; automated
   green tests do not substitute for physical DualSense evidence. P3-specific
-  results belong in `docs/P3_VALIDATION.md`.
+  results belong in `docs/P3_VALIDATION.md`. P5 provider, Windows and physical
+  evidence belongs in `docs/P5_VALIDATION.md`; automated green tests do not
+  replace `WINDOWS/HARDWARE VALIDATION PENDING`.
 
 ## P4 productization commands
 

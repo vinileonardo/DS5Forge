@@ -86,13 +86,26 @@ Vitest **41 passed**, Vite build and production `npm audit` PASS.
 ## Independent review final pass (block 3)
 
 The stale Rust lock/toolchain gap was closed with the native Windows Rust toolchain
-(`cargo 1.98.1` / `rustc 1.98.1`) invoked from the Windows host. The review found
-one additional Major that the Linux/source gates could not expose: the Tauri crate
-used `tauri::generate_context!()` without declaring `serde_json` directly. The
-dependency was added, `Cargo.lock` was regenerated, and the lock now records
-`ds5forge 0.4.0`, `serde_json`, and the required Tauri plugins. Clippy also exposed
-and closed `manual_div_ceil` and `needless_borrow` warnings required by the CI
-`-D warnings` gate.
+(`cargo 1.98.1` / `rustc 1.98.1`) invoked from the Windows host. Native compilation
+could not run before, so it exposed two source defects the Linux/source gates cannot:
+
+1. (Major, fixed) the Tauri crate used `tauri::generate_context!()` without declaring
+   `serde_json` directly. `serde_json` was added, `Cargo.lock` was regenerated, and the
+   lock now records `ds5forge 0.4.0`, `serde_json`, and the required Tauri plugins.
+2. (Critical, fixed) `plugins.updater` was configured with `windows.installMode` but no
+   `pubkey`. `tauri-plugin-updater` declares `pubkey: String` with no serde default, so
+   `App::build` fails plugin initialization and the shell's `.expect(...)` would panic on
+   every launch. A clearly unset placeholder (`"pubkey": ""`, `"endpoints": []`) keeps
+   plugin initialization deserializable for normal builds; the signed release overlay in
+   `scripts/build_installer.py` still injects the real `TAURI_SIGNING_PUBLIC_KEY` and
+   endpoint. Clippy also closed `manual_div_ceil` and `needless_borrow` warnings required
+   by the CI `-D warnings` gate.
+
+Four static `TestTauriReleaseContract` tests now guard the manifest dependency, the lockfile
+plugin graph, the deserializable updater config, and the minimal capability scope so
+these defects cannot silently return. Update metadata comparison was also hardened to
+honor SemVer prerelease precedence (numeric-identifier ordering and build-metadata
+equality) and is covered by `test_update_uses_semver_prerelease_precedence`.
 
 Native Windows Rust proof after those fixes:
 
@@ -102,6 +115,25 @@ Native Windows Rust proof after those fixes:
 - A temporary sidecar placeholder was used only to satisfy Tauri's `externalBin`
   existence check during compile validation and was removed immediately afterward;
   no generated `frontend/src-tauri/binaries/` directory remains in the working tree.
+- `--config build.incremental=false` is only needed because this Linux checkout is
+  compiled over the WSL UNC path; a native Windows checkout does not require it.
+
+### Proof boundary
+
+Native Windows Rust compilation proves the Tauri crate and configuration compile and
+that the manifest, lockfile and plugin graph resolve. It does **not** prove runtime
+behavior.
+
+Proven by native Windows Rust compilation: `cargo fmt`/`check`/`clippy`, the plugin
+dependency graph, `tauri::generate_context!` expansion, and updater plugin config
+deserialization (now guarded by static tests).
+
+Still requiring Windows runtime (NSIS/Tauri execution): clean per-user install,
+reinstall and upgrade, packaged sidecar launch/orphan cleanup, tray, single-instance,
+autostart, signed updater end-to-end, and Remote OFF leaving no listener.
+
+Still requiring physical hardware: wired DualSense connect/reconnect, haptics, touchpad,
+trigger/motor neutralization and profile/game teardown.
 
 Final regression gates on the resulting source state:
 
@@ -109,7 +141,7 @@ Final regression gates on the resulting source state:
 - Ruff format/check: PASS (**85 files**).
 - mypy `source/dualsense_companion scripts`: PASS (**63 source files**).
 - Python `compileall`: PASS.
-- Python pytest: **125 passed**.
+- Python pytest: **129 passed** (adds 4 Tauri manifest/lock/updater/capability contract tests).
 - Frontend Prettier, ESLint and TypeScript: PASS.
 - Vitest: **41 passed** across **12 files**.
 - Vite production build: PASS.
@@ -123,9 +155,9 @@ Final regression gates on the resulting source state:
 - `docs/P2_REVIEW_SCOPE.json` and `docs/P2_REVIEW_SCOPE_V2.json` remained untouched
   during the P4 review.
 
-The remaining evidence is runtime/hardware evidence, not an unresolved source
-Major: clean NSIS install/reinstall/upgrade/uninstall, real packaged sidecar
-launch/orphan cleanup, tray/single-instance/autostart behavior, signed updater
-end-to-end behavior, and physical wired DualSense validation remain
-`WINDOWS RUNTIME VALIDATION PENDING` / `HARDWARE VALIDATION PENDING` as listed
-above.
+With those two source defects fixed, no unresolved source Critical/Major remains. The
+remaining evidence is runtime/hardware evidence only: clean NSIS
+install/reinstall/upgrade/uninstall, real packaged sidecar launch/orphan cleanup,
+tray/single-instance/autostart behavior, signed updater end-to-end behavior, and
+physical wired DualSense validation remain `WINDOWS RUNTIME VALIDATION PENDING` /
+`HARDWARE VALIDATION PENDING` as listed above.

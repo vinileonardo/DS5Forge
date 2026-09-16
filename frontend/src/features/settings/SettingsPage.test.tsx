@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Config } from "../../lib/api/contracts";
 import { api } from "../../lib/api/client";
+import { I18nProvider, LOCALE_STORAGE_KEY } from "../../lib/i18n";
 import { SettingsPage } from "./SettingsPage";
 
 const model = vi.hoisted(() => ({ value: {} as unknown }));
@@ -14,6 +15,7 @@ vi.mock("../../lib/runtime/RuntimeProvider", () => ({
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  localStorage.clear();
 });
 
 function makeConfig(): Config {
@@ -84,6 +86,38 @@ describe("SettingsPage recovery surfaces", () => {
 
     finishRestart?.({ state: "running", core: "running", pid: null, message: null });
     await waitFor(() => expect(screen.queryByLabelText("Restarting local core")).not.toBeInTheDocument());
+  });
+});
+
+describe("SettingsPage language selector", () => {
+  it("switches the visible page copy live through the global locale store", async () => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, "en-US");
+    model.value = makeValue(vi.fn());
+    render(
+      <I18nProvider>
+        <SettingsPage />
+      </I18nProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Desktop" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Startup" })).toBeVisible();
+    expect(screen.getByText("Advanced · Remote Access")).toBeInTheDocument();
+    expect(screen.getByLabelText("Theme")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /check for updates/i })).toBeVisible();
+
+    const selector = screen.getByLabelText("Language");
+    fireEvent.change(selector, { target: { value: "pt-BR" } });
+
+    expect(await screen.findByRole("heading", { name: "Configurações" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Área de trabalho" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Inicialização" })).toBeVisible();
+    expect(screen.getByText("Avançado · Acesso remoto")).toBeInTheDocument();
+    expect(screen.getByLabelText("Tema")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /verificar atualizações/i })).toBeVisible();
+    expect(screen.getByRole("button", { name: /exportar pacote de suporte/i })).toBeVisible();
+    expect(screen.getByRole("button", { name: /salvar configurações/i })).toBeVisible();
+    expect(localStorage.getItem(LOCALE_STORAGE_KEY)).toBe("pt-BR");
   });
 });
 

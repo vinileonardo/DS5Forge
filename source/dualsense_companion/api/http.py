@@ -9,7 +9,7 @@ from ..core.product import ProductService
 from ..core.remote import is_loopback_host, validate_remote_origin
 from ..diagnostics.logging import get_logger
 from ..domain.errors import DS5ForgeError, ErrorCode
-from ..domain.models import AdaptiveTriggerEffect, LightbarState, StickCalibration, TriggerState
+from ..domain.models import AdaptiveTriggerEffect, LightbarState, PlayerLedState, StickCalibration, TriggerState
 from .origins import DEFAULT_ALLOWED_ORIGINS, validate_allowed_origins
 from .schemas import (
     API_PREFIX,
@@ -27,9 +27,13 @@ from .schemas import (
     ConflictDiagnosticsResponse,
     ControllerTelemetryResponse,
     DeleteProfileResponse,
+    DuplicateInputDiagnosticResponse,
+    ExclusiveCapabilityResponse,
+    ExclusiveStatusResponse,
     ForegroundApplicationResponse,
     FullControllerProfile,
     FullProfileSaveRequest,
+    GameCandidatesResponse,
     GameDefinitionRequest,
     GameDefinitionResponse,
     GameMatchResponse,
@@ -45,6 +49,8 @@ from .schemas import (
     LightbarResponse,
     MappingsResponse,
     MappingsUpdateRequest,
+    PlayerLedApplyRequest,
+    PlayerLedResponse,
     ProfileImportRequest,
     ProfileLoadResponse,
     ProfileSaveResponse,
@@ -344,6 +350,10 @@ def create_app(
     async def games() -> dict[str, Any]:
         return {"games": facade.games()}
 
+    @app.get(f"{API_PREFIX}/games/candidates", response_model=GameCandidatesResponse)
+    async def game_candidates() -> dict[str, Any]:
+        return {"candidates": facade.game_candidates()}
+
     @app.post(f"{API_PREFIX}/games", response_model=GameDefinitionResponse)
     async def add_game(payload: GameDefinitionRequest) -> dict[str, Any]:
         return facade.add_game(payload.model_dump())
@@ -408,6 +418,30 @@ def create_app(
     @app.get(f"{API_PREFIX}/diagnostics/conflicts", response_model=ConflictDiagnosticsResponse)
     async def conflict_diagnostics() -> dict[str, Any]:
         return {"conflicts": facade.conflict_diagnostics()}
+
+    @app.get(f"{API_PREFIX}/diagnostics/duplicate-input", response_model=DuplicateInputDiagnosticResponse)
+    async def duplicate_input_diagnostics() -> dict[str, Any]:
+        return facade.duplicate_input_diagnostics()
+
+    @app.get(f"{API_PREFIX}/exclusive/capabilities", response_model=ExclusiveCapabilityResponse)
+    async def exclusive_capabilities() -> dict[str, Any]:
+        return facade.exclusive_capability()
+
+    @app.get(f"{API_PREFIX}/exclusive/status", response_model=ExclusiveStatusResponse)
+    async def exclusive_status() -> dict[str, Any]:
+        return facade.exclusive_status()
+
+    @app.post(f"{API_PREFIX}/exclusive/enable", response_model=ExclusiveStatusResponse)
+    async def enable_exclusive() -> dict[str, Any]:
+        return facade.enable_exclusive()
+
+    @app.post(f"{API_PREFIX}/exclusive/disable", response_model=ExclusiveStatusResponse)
+    async def disable_exclusive() -> dict[str, Any]:
+        return facade.disable_exclusive()
+
+    @app.post(f"{API_PREFIX}/exclusive/heartbeat", response_model=ExclusiveStatusResponse)
+    async def exclusive_heartbeat() -> dict[str, Any]:
+        return facade.exclusive_heartbeat()
 
     @app.get(f"{API_PREFIX}/config", response_model=ConfigResponse)
     async def config() -> dict[str, Any]:
@@ -502,6 +536,20 @@ def create_app(
     async def reset_lightbar() -> dict[str, Any]:
         facade.reset_lightbar()
         return facade.state_dict()["lightbar"]
+
+    @app.get(f"{API_PREFIX}/controller/player-leds", response_model=PlayerLedResponse)
+    async def controller_player_leds() -> dict[str, Any]:
+        return facade.player_led_state().to_dict()
+
+    @app.put(f"{API_PREFIX}/controller/player-leds", response_model=PlayerLedResponse)
+    async def apply_player_leds(payload: PlayerLedApplyRequest) -> dict[str, Any]:
+        facade.apply_player_leds(PlayerLedState(**payload.model_dump()))
+        return facade.state_dict()["player_leds"]
+
+    @app.post(f"{API_PREFIX}/controller/player-leds/reset", response_model=PlayerLedResponse)
+    async def reset_player_leds() -> dict[str, Any]:
+        facade.reset_player_leds()
+        return facade.state_dict()["player_leds"]
 
     @app.get(f"{API_PREFIX}/controller/triggers", response_model=TriggerStateResponse)
     async def controller_triggers() -> dict[str, Any]:

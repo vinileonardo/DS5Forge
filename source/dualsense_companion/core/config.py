@@ -170,7 +170,16 @@ def default_controller_profile(name: str = "Default", *, rumble: Mapping[str, An
         "schema_version": PROFILE_SCHEMA_VERSION,
         "name": name,
         "rumble": copy.deepcopy(config["rumble"]),
-        "lightbar": {"r": 0, "g": 0, "b": 0, "enabled": True, "brightness": 2, "pulse": "off"},
+        "lightbar": {
+            "r": 0,
+            "g": 0,
+            "b": 0,
+            "enabled": True,
+            "brightness": 2,
+            "pulse": "off",
+            "intensity": 1.0,
+            "effect": "steady",
+        },
         "triggers": {"left": _default_trigger_effect(), "right": _default_trigger_effect()},
         "sticks": {
             "left_deadzone": 0.08,
@@ -267,7 +276,7 @@ def _validate_full_rumble(value: Any) -> dict[str, Any]:
 def _validate_lightbar(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ConfigValidationError("Profile is invalid.", fields={"lightbar": "must be an object"})
-    allowed = {"r", "g", "b", "enabled", "brightness", "pulse"}
+    allowed = {"r", "g", "b", "enabled", "brightness", "pulse", "intensity", "effect"}
     unknown = sorted(set(value) - allowed)
     if unknown:
         raise ConfigValidationError(fields={"lightbar": {"unknown": unknown}})
@@ -281,7 +290,22 @@ def _validate_lightbar(value: Any) -> dict[str, Any]:
         raise ConfigValidationError(fields={"lightbar.brightness": "must be an integer between 0 and 2"})
     if not isinstance(value.get("pulse"), str) or value["pulse"] not in {"off", "slow", "fast"}:
         raise ConfigValidationError(fields={"lightbar.pulse": "must be off, slow or fast"})
-    result.update({"enabled": value["enabled"], "brightness": value["brightness"], "pulse": value["pulse"]})
+    intensity = value.get("intensity", 1.0)
+    if isinstance(intensity, bool) or not finite_number(intensity) or not 0 <= float(intensity) <= 1:
+        raise ConfigValidationError(fields={"lightbar.intensity": "must be a number between 0 and 1"})
+    effect = value.get("effect", "steady")
+    allowed_effects = {"steady", "pulse", "slow", "fast"}
+    if not isinstance(effect, str) or effect.strip().lower() not in allowed_effects:
+        raise ConfigValidationError(fields={"lightbar.effect": "must be steady, pulse, slow or fast"})
+    result.update(
+        {
+            "enabled": value["enabled"],
+            "brightness": value["brightness"],
+            "pulse": value["pulse"],
+            "intensity": float(intensity),
+            "effect": effect.strip().lower(),
+        }
+    )
     return result
 
 

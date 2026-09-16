@@ -142,6 +142,7 @@ class ControllerCapabilitiesResponse(StrictModel):
     microphone_button: bool
     lightbar: bool
     adaptive_triggers: bool
+    adaptive_trigger_output_reports: bool = False
     availability: dict[str, CapabilityAvailabilityResponse]
 
 
@@ -159,6 +160,8 @@ class TouchPointResponse(StrictModel):
     active: bool
     x: float
     y: float
+    contact_id: int | None = None
+    raw: dict[str, Any] = Field(default_factory=dict)
 
 
 class StickTelemetryResponse(StrictModel):
@@ -210,6 +213,13 @@ class LightbarResponse(StrictModel):
     enabled: StrictBool
     brightness: StrictInt = Field(ge=0, le=2)
     pulse: Literal["off", "slow", "fast"]
+    intensity: Number = Field(default=1.0, ge=0, le=1)
+    effect: str = "steady"
+
+
+class PlayerLedResponse(StrictModel):
+    enabled: StrictBool
+    intensity: Number = Field(ge=0, le=1)
 
 
 class AdaptiveTriggerEffectResponse(StrictModel):
@@ -295,6 +305,7 @@ class GameDefinitionRequest(StrictModel):
     executable_path: StrictStr | None = None
     profile: StrictStr = "Default"
     compatibility_mode: Literal["native", "remap", "virtual"] = "native"
+    adaptive_trigger_mode: Literal["native", "reactive", "off"] = "native"
     enabled: StrictBool = True
 
 
@@ -304,6 +315,19 @@ class GameDefinitionResponse(GameDefinitionRequest):
 
 class GamesResponse(StrictModel):
     games: list[GameDefinitionResponse]
+
+
+class GameCandidateResponse(StrictModel):
+    executable_name: str
+    executable_path: str | None
+    pid: int | None
+    title: str | None
+    source: Literal["running", "recent"] | str
+    observed_at: float
+
+
+class GameCandidatesResponse(StrictModel):
+    candidates: list[GameCandidateResponse]
 
 
 class RuleEvaluationResponse(StrictModel):
@@ -371,6 +395,59 @@ class VirtualControllerCapabilityResponse(StrictModel):
     physical_suppression_supported: bool
     provider: str | None
     reason: str | None
+
+
+class ProviderProvenanceResponse(StrictModel):
+    provider: str
+    version: str | None
+    executable: str | None
+    sha256: str | None
+    signature_verified: bool
+    provenance_verified: bool
+    integrity_verified: bool
+    windows_validated: bool
+    evidence: list[str]
+
+
+class ExclusiveCapabilityResponse(StrictModel):
+    provider_available: bool
+    provider_installed: bool
+    virtual_output_reports: bool
+    physical_suppression_available: bool
+    physical_suppression_verified: bool
+    provenance: ProviderProvenanceResponse
+    reason: str
+
+
+class ExclusiveStatusResponse(StrictModel):
+    mode: Literal["off", "starting", "active", "stopping", "error"]
+    enabled: bool
+    generation: int
+    ownership_acquired: bool
+    heartbeat_at: float
+    heartbeat_timeout_ms: int
+    stale: bool
+    physical_input_visible: bool
+    virtual_input_active: bool
+    physical_suppression_active: bool
+    double_input_risk: bool
+    capability: ExclusiveCapabilityResponse
+    reason: str | None
+    last_error: str | None
+    mirrored_sequence: int
+    updated_at: float
+
+
+class DuplicateInputDiagnosticResponse(StrictModel):
+    risk: bool
+    physical_visible: bool
+    virtual_active: bool
+    suppression_verified: bool
+    exclusive_enabled: bool
+    severity: str
+    message: str
+    evidence: list[str]
+    checked_at: float
 
 
 class CompatibilityStateResponse(StrictModel):
@@ -477,6 +554,7 @@ class RuntimeStateResponse(StrictModel):
     input: ControllerInputResponse
     telemetry: ControllerTelemetryResponse
     lightbar: LightbarResponse
+    player_leds: PlayerLedResponse = PlayerLedResponse(enabled=True, intensity=1.0)
     triggers: TriggerStateResponse
     haptics_test: HapticsTestRunResponse | None = None
     stick_calibration: StickCalibrationResponse
@@ -495,6 +573,7 @@ class RuntimeStateResponse(StrictModel):
     compatibility: CompatibilityStateResponse | None = None
     synthetic_outputs: SyntheticOutputStateResponse | None = None
     conflicts: list[ConflictDiagnosticResponse] = Field(default_factory=list)
+    exclusive: ExclusiveStatusResponse | None = None
 
 
 class ProfileSummary(StrictModel):
@@ -514,6 +593,13 @@ class LightbarApplyRequest(StrictModel):
     enabled: StrictBool = True
     brightness: StrictInt = Field(default=2, ge=0, le=2)
     pulse: Literal["off", "slow", "fast"] = "off"
+    intensity: Number = Field(default=1.0, ge=0, le=1)
+    effect: str = Field(default="steady", max_length=32)
+
+
+class PlayerLedApplyRequest(StrictModel):
+    enabled: StrictBool = True
+    intensity: Number = Field(default=1.0, ge=0, le=1)
 
 
 class TriggerEffectRequest(StrictModel):

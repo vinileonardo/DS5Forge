@@ -144,6 +144,45 @@ const matchResponse = {
   evaluations: state.automation.rule_evaluations,
 };
 
+const exclusiveCapability = {
+  provider_available: false,
+  provider_installed: false,
+  virtual_output_reports: false,
+  physical_suppression_available: false,
+  physical_suppression_verified: false,
+  provenance: {
+    provider: "none",
+    version: null,
+    executable: null,
+    sha256: null,
+    signature_verified: false,
+    provenance_verified: false,
+    integrity_verified: false,
+    windows_validated: false,
+    evidence: ["provider not configured"],
+  },
+  reason: "Exclusive Mode is disabled until a verified Windows provider is available.",
+};
+
+const exclusiveStatus = {
+  mode: "off",
+  enabled: false,
+  generation: 0,
+  ownership_acquired: false,
+  heartbeat_at: 0,
+  heartbeat_timeout_ms: 1500,
+  stale: false,
+  physical_input_visible: true,
+  virtual_input_active: false,
+  physical_suppression_active: false,
+  double_input_risk: true,
+  capability: exclusiveCapability,
+  reason: null,
+  last_error: null,
+  mirrored_sequence: 0,
+  updated_at: 0,
+};
+
 async function mockCore(page: Page, closeFirstSocket = false) {
   let socketCount = 0;
   await page.route("http://127.0.0.1:8765/api/v1/**", async (route) => {
@@ -158,12 +197,18 @@ async function mockCore(page: Page, closeFirstSocket = false) {
       await route.fulfill({ json: { profiles: [{ name: "Default", source: "bundled", editable: false }] } });
     } else if (url.endsWith("/games") && route.request().method() === "GET") {
       await route.fulfill({ json: { games: [game] } });
+    } else if (url.endsWith("/games/candidates")) {
+      await route.fulfill({ json: { candidates: [] } });
     } else if (url.endsWith("/mappings")) {
       await route.fulfill({ json: { mappings: [] } });
     } else if (url.endsWith("/chords")) {
       await route.fulfill({ json: { chords: [] } });
     } else if (url.endsWith("/diagnostics/conflicts")) {
       await route.fulfill({ json: { conflicts: [] } });
+    } else if (url.endsWith("/exclusive/capabilities")) {
+      await route.fulfill({ json: exclusiveCapability });
+    } else if (url.endsWith("/exclusive/status")) {
+      await route.fulfill({ json: exclusiveStatus });
     } else if (url.endsWith("/test-match")) {
       await route.fulfill({ json: matchResponse });
     } else {
