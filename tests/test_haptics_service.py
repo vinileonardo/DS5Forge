@@ -1,4 +1,5 @@
 import struct
+import threading
 import unittest
 
 from dualsense_companion.core.config import default_config
@@ -110,6 +111,61 @@ class HapticsServiceTests(unittest.TestCase):
 
         self.assertGreaterEqual(len(configs), 2)
         self.assertEqual(capture.reads, 1)
+
+    def test_stop_closes_active_capture_to_interrupt_blocked_read(self):
+        read_entered = threading.Event()
+        release_read = threading.Event()
+        errors = []
+
+        class Capture:
+            sample_rate = 48_000
+            channels = 1
+            frames = 64
+            name = "Blocking Loopback"
+
+            def __init__(self):
+                self.close_calls = 0
+
+            def read(self):
+                read_entered.set()
+                release_read.wait(5.0)
+                raise RuntimeError("capture closed")
+
+            def default_output_changed(self):
+                return False
+
+            def close(self):
+                self.close_calls += 1
+                release_read.set()
+
+        capture = Capture()
+
+        class Context:
+            def __enter__(self):
+                return capture
+
+            def __exit__(self, exc_type, exc, tb):
+                capture.close()
+
+        class Factory:
+            def open(self):
+                return Context()
+
+        service = HapticsService(
+            lambda _left, _right: True,
+            lambda: default_config()["rumble"],
+            lambda: True,
+            capture_factory=Factory(),
+            on_error=errors.append,
+        )
+        service.start()
+        self.assertTrue(read_entered.wait(1.0))
+
+        service.stop(join_timeout=1.0)
+
+        self.assertFalse(service.is_alive())
+        self.assertGreaterEqual(capture.close_calls, 1)
+        self.assertEqual(errors, [])
 
     def test_missing_capture_adapter_reports_audio_error(self):
         errors = []

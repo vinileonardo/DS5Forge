@@ -12,7 +12,7 @@ from ..diagnostics.health import health_from_snapshot
 from ..diagnostics.logging import get_logger
 from ..domain.errors import CapabilityUnavailableError, ConfigValidationError, DS5ForgeError, ErrorCode
 from ..domain.events import EventType
-from ..domain.exclusive import ExclusiveStatus
+from ..domain.exclusive import DuplicateInputDiagnostic, ExclusiveStatus
 from ..domain.games import (
     AdaptiveTriggerMode,
     AutomationState,
@@ -57,7 +57,11 @@ from .controller_lab import HapticsTestBench, TriggerPreviewCoordinator
 from .controller_service import ControllerService, LifecycleNotification
 from .event_bus import Subscription
 from .exclusive_input import ExclusiveCoordinator
-from .game_automation import ForegroundWorker, conflict_diagnostics, evaluate_game_rules
+from .game_automation import (
+    ForegroundWorker,
+    conflict_diagnostics,
+    evaluate_running_game_rules,
+)
 from .game_candidates import GameCandidate, merge_candidates
 from .games_repository import (
     GameNotFoundError,
@@ -67,6 +71,7 @@ from .games_repository import (
     mapping_definitions,
 )
 from .haptics_service import HapticsService
+from .input_isolation import InputIsolationCoordinator
 from .lightbar import InterruptiblePulseAnimator
 from .outputs import OutputManager, RemappingEngine
 from .ports import (
@@ -113,6 +118,7 @@ class CoreFacade:
         process_inspector: ProcessInspector | None = None,
         virtual_provider: VirtualControllerProvider | None = None,
         exclusive_coordinator: ExclusiveCoordinator | None = None,
+        input_isolation: InputIsolationCoordinator | None = None,
         game_candidate_provider: Any | None = None,
         foreground_poll_interval: float = 0.75,
     ) -> None:
@@ -138,12 +144,14 @@ class CoreFacade:
         self._process_inspector = process_inspector
         self._virtual_provider = virtual_provider
         self._exclusive = exclusive_coordinator or ExclusiveCoordinator()
+        self._input_isolation = input_isolation or InputIsolationCoordinator()
         self._exclusive_monitor_stop = threading.Event()
         self._exclusive_monitor: threading.Thread | None = None
         self._last_exclusive_published: ExclusiveStatus = self._exclusive.status()
         self._game_candidate_provider = game_candidate_provider
         self._recent_candidates: list[GameCandidate] = []
         self._recent_candidates_limit = 24
+        self._last_running_game_context: tuple[tuple[object, ...], ...] | None = None
 
         initial_error = self.config_repository.last_error.to_snapshot() if self.config_repository.last_error else None
         if initial_error is None and self.games_repository.last_error is not None:
@@ -273,6 +281,15 @@ class CoreFacade:
             self._started = True
             self._disconnecting = False
         LOGGER.info("core starting", extra={"event": "core.start"})
+        try:
+            recovered_isolation, isolation_status = self._input_isolation.recover_stale()
+            if recovered_isolation:
+                LOGGER.warning(
+                    "recovered stale physical input isolation",
+                    extra={"event": "input_isolation.recovered", "status": isolation_status.to_dict()},
+                )
+        except DS5ForgeError as exc:
+            self._record_error(exc)
         recovery = self._exclusive.recover()
         if recovery.performed:
             self._set_exclusive_status(recovery.status, event_type=EventType.EXCLUSIVE_RECOVERED)
@@ -330,6 +347,7 @@ class CoreFacade:
                 self._close_virtual_provider()
                 self._stop_exclusive_monitor()
                 self._disable_exclusive(reason="shutdown")
+                self._disable_input_isolation(reason="shutdown")
                 self._reset_adaptive_triggers(reason="shutdown")
                 return
             self._started = False
@@ -361,6 +379,7 @@ class CoreFacade:
         self._close_virtual_provider()
         self._stop_exclusive_monitor()
         self._disable_exclusive(reason="shutdown")
+        self._disable_input_isolation(reason="shutdown")
         self._reset_adaptive_triggers(reason="shutdown")
 
     def snapshot(self) -> RuntimeSnapshot:
@@ -493,8 +512,101 @@ class CoreFacade:
         self._set_exclusive_status(status)
         return status.to_dict()
 
+    def input_isolation_capability(self) -> dict[str, Any]:
+        return self._input_isolation.capability().to_dict()
+
+    def input_isolation_status(self) -> dict[str, Any]:
+        return self._input_isolation.status().to_dict()
+
+    def enable_input_isolation(self) -> dict[str, Any]:
+        with self._compatibility_lock:
+            current = self.snapshot().compatibility
+            if current.mode != CompatibilityMode.REMAP:
+                raise DS5ForgeError(
+                    ErrorCode.INPUT_ISOLATION_UNAVAILABLE,
+                    "Physical input isolation is only available while Remap mode is active.",
+                    fields={"compatibility_mode": current.mode.value},
+                )
+            if self.snapshot().exclusive.enabled:
+                raise DS5ForgeError(
+                    ErrorCode.INPUT_ISOLATION_UNAVAILABLE,
+                    "Physical input isolation cannot coexist with Exclusive mode.",
+                )
+            status = self._input_isolation.enable()
+            next_state = replace(
+                current,
+                physical_input_visible=status.physical_input_visible,
+                physical_suppression_active=status.active,
+                double_input_risk=status.double_input_risk,
+                reason=status.reason,
+                changed_at=time.time(),
+            )
+            self.store.update(compatibility=next_state)
+            self.store.publish(EventType.COMPATIBILITY_CHANGED.value, {"compatibility": next_state})
+        self.duplicate_input_diagnostics()
+        return status.to_dict()
+
+    def disable_input_isolation(self, *, reason: str = "manual") -> dict[str, Any]:
+        return self._disable_input_isolation(reason=reason).to_dict()
+
+    def _disable_input_isolation(self, *, reason: str) -> Any:
+        try:
+            status = self._input_isolation.disable()
+        except DS5ForgeError as exc:
+            self._record_error(exc)
+            status = self._input_isolation.status()
+        current = self.snapshot().compatibility
+        if current.mode == CompatibilityMode.REMAP:
+            next_state = replace(
+                current,
+                physical_input_visible=status.physical_input_visible,
+                physical_suppression_active=False,
+                double_input_risk=True,
+                reason=(
+                    f"Physical isolation ended ({reason}); Remap may duplicate physical controller input."
+                    if status.last_error is None
+                    else f"Physical isolation teardown needs attention: {status.last_error}"
+                ),
+                changed_at=time.time(),
+            )
+            self.store.update(compatibility=next_state)
+            self.store.publish(EventType.COMPATIBILITY_CHANGED.value, {"compatibility": next_state})
+        return status
+
     def duplicate_input_diagnostics(self) -> dict[str, Any]:
-        diagnostic = self._exclusive.duplicate_input_diagnostic()
+        isolation = self._input_isolation.status()
+        compatibility = self.snapshot().compatibility
+        if compatibility.mode == CompatibilityMode.REMAP and isolation.active:
+            diagnostic = DuplicateInputDiagnostic(
+                risk=False,
+                physical_visible=isolation.physical_input_visible,
+                virtual_active=False,
+                suppression_verified=True,
+                exclusive_enabled=False,
+                severity="success",
+                message="Physical DualSense input is isolated for Remap while DS5Forge remains allowlisted.",
+                evidence=(
+                    f"provider={isolation.capability.provider}",
+                    f"device={isolation.device_instance_path or 'unknown'}",
+                ),
+                checked_at=time.time(),
+            )
+        else:
+            diagnostic = self._exclusive.duplicate_input_diagnostic()
+            if compatibility.mode == CompatibilityMode.REMAP:
+                evidence = (*diagnostic.evidence, f"input_isolation={isolation.capability.reason or 'available'}")
+                diagnostic = replace(
+                    diagnostic,
+                    risk=True,
+                    physical_visible=compatibility.physical_input_visible,
+                    virtual_active=False,
+                    suppression_verified=False,
+                    exclusive_enabled=False,
+                    severity="warning",
+                    message="Remap is active while the physical DualSense remains visible; duplicate input is possible.",
+                    evidence=evidence,
+                    checked_at=time.time(),
+                )
         self.store.publish(EventType.DUPLICATE_INPUT.value, {"diagnostic": diagnostic})
         return diagnostic.to_dict()
 
@@ -1057,43 +1169,42 @@ class CoreFacade:
             return copy.deepcopy(self._games_config["games"])
 
     def game_candidates(self) -> list[dict[str, Any]]:
-        """Return best-effort running/recent candidates without persistence.
+        """Return registered live processes plus bounded recent observations.
 
-        The "recent" set is a bounded in-memory list of foreground observations
-        observed during this core session. This is not OS-wide running-process
-        discovery.
+        On Windows, the process inspector now supplies real live process
+        identities for configured executables, so a background game remains a
+        running candidate after Alt+Tab. The recent list is still bounded and
+        in-memory only; this endpoint does not perform an unrestricted process
+        inventory for the UI.
         """
 
-        provider = self._game_candidate_provider
         foreground = self.snapshot().foreground
-        running = (
-            [
-                GameCandidate(
-                    executable_name=foreground.executable_name,
-                    executable_path=foreground.executable_path,
-                    pid=foreground.pid,
-                    title=foreground.title,
-                    source="running",
-                    observed_at=foreground.observed_at,
-                )
-            ]
-            if foreground.available and foreground.executable_name
-            else []
-        )
+        running = [
+            GameCandidate(
+                executable_name=observation.executable_name or "",
+                executable_path=observation.executable_path,
+                pid=observation.pid,
+                title=observation.title,
+                source="running",
+                observed_at=observation.observed_at,
+            )
+            for observation in self._running_game_observations(foreground)
+            if observation.executable_name
+        ]
         with self._games_lock:
             recent = list(self._recent_candidates)
-        try:
-            if provider is not None:
-                running = [*provider.running(), *running]
+        provider = self._game_candidate_provider
+        if provider is not None:
+            try:
                 recent = [*provider.recent(), *recent]
-        except Exception as exc:
-            self._record_error(
-                DS5ForgeError(
-                    ErrorCode.FOREGROUND_UNAVAILABLE,
-                    "Game candidate discovery is unavailable.",
-                    detail=str(exc),
+            except Exception as exc:
+                self._record_error(
+                    DS5ForgeError(
+                        ErrorCode.FOREGROUND_UNAVAILABLE,
+                        "Recent game candidate discovery is unavailable.",
+                        detail=str(exc),
+                    )
                 )
-            )
         return [item.to_dict() for item in merge_candidates(running, recent)]
 
     def _remember_candidate(self, foreground: ForegroundApplication) -> None:
@@ -1208,18 +1319,25 @@ class CoreFacade:
         return self.snapshot().foreground.to_dict()
 
     def test_game_match(self, game_id: str | None = None) -> dict[str, Any]:
-        foreground = self.snapshot().foreground
+        snapshot = self.snapshot()
+        foreground = snapshot.foreground
         definitions = list(self._registry_games())
         if game_id is not None:
             definitions = [game for game in definitions if game.id.casefold() == str(game_id).casefold()]
             if not definitions:
                 raise GameNotFoundError(game_id)
-        match, evaluations = evaluate_game_rules(foreground, definitions)
+        running = self._running_game_observations(foreground)
+        match, evaluations = evaluate_running_game_rules(
+            foreground,
+            running,
+            definitions,
+            active_game_id=snapshot.automation.active_game_id,
+        )
         return {
             "matched": match is not None,
             "game_id": match.game_id if match else None,
             "game_name": match.game_name if match else None,
-            "reason": match.reason if match else "No registered game rule matched the foreground executable.",
+            "reason": match.reason if match else "No registered game rule matched a running process.",
             "foreground": foreground.to_dict(),
             "evaluations": [evaluation.to_dict() for evaluation in evaluations],
         }
@@ -1358,6 +1476,90 @@ class CoreFacade:
         with self._games_lock:
             return game_definitions(self._games_config)
 
+    def _registered_executable_names(self) -> tuple[str, ...]:
+        names: list[str] = []
+        seen: set[str] = set()
+        for game in self._registry_games():
+            if not game.enabled:
+                continue
+            for executable in game.executables:
+                key = executable.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                names.append(executable)
+        return tuple(names)
+
+    def _running_game_observations(
+        self,
+        foreground: ForegroundApplication,
+    ) -> tuple[ForegroundApplication, ...]:
+        observations: list[ForegroundApplication] = []
+        provider = self._game_candidate_provider
+        if provider is not None:
+            try:
+                for candidate in provider.running():
+                    observations.append(
+                        ForegroundApplication(
+                            available=True,
+                            pid=candidate.pid,
+                            executable_name=candidate.executable_name,
+                            executable_path=candidate.executable_path,
+                            title=candidate.title,
+                            observed_at=candidate.observed_at or time.time(),
+                            process_alive=True,
+                        )
+                    )
+            except Exception as exc:
+                LOGGER.warning(
+                    "game candidate provider failed during lifecycle polling",
+                    extra={"event": "game.candidates_failed", "error": str(exc)},
+                )
+
+        inspector_getter = getattr(self._process_inspector, "running_applications", None)
+        if callable(inspector_getter):
+            try:
+                inspected = inspector_getter(self._registered_executable_names())
+                if inspected is not None:
+                    observations.extend(item for item in inspected if isinstance(item, ForegroundApplication))
+            except Exception as exc:
+                LOGGER.warning(
+                    "running game process inspection failed",
+                    extra={"event": "game.running_processes_failed", "error": str(exc)},
+                )
+
+        if foreground.available and foreground.process_alive and foreground.executable_name:
+            observations.insert(0, foreground)
+
+        deduplicated: list[ForegroundApplication] = []
+        seen: set[tuple[object, ...]] = set()
+        for observation in observations:
+            key = (
+                observation.pid,
+                (observation.executable_name or "").casefold(),
+                (observation.executable_path or "").casefold(),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduplicated.append(observation)
+        return tuple(deduplicated)
+
+    @staticmethod
+    def _running_context_key(
+        running: tuple[ForegroundApplication, ...],
+    ) -> tuple[tuple[object, ...], ...]:
+        return tuple(
+            sorted(
+                (
+                    item.pid or 0,
+                    (item.executable_name or "").casefold(),
+                    (item.executable_path or "").casefold(),
+                )
+                for item in running
+            )
+        )
+
     def _on_foreground_observation(self, foreground: ForegroundApplication, changed: bool) -> None:
         previous = self.snapshot().foreground
         self.store.update(foreground=foreground)
@@ -1367,15 +1569,41 @@ class CoreFacade:
                 EventType.GAME_FOREGROUND_CHANGED.value,
                 {"foreground": foreground, "changed": changed, "previous": previous},
             )
-        self._evaluate_foreground(foreground, allow_transition=changed)
+        running = self._running_game_observations(foreground)
+        running_context = self._running_context_key(running)
+        running_changed = running_context != self._last_running_game_context
+        self._last_running_game_context = running_context
+        self._evaluate_foreground(
+            foreground,
+            running=running,
+            allow_transition=changed or running_changed,
+        )
 
-    def _evaluate_foreground(self, foreground: ForegroundApplication, *, allow_transition: bool) -> None:
+    def _evaluate_foreground(
+        self,
+        foreground: ForegroundApplication,
+        *,
+        running: tuple[ForegroundApplication, ...] | None = None,
+        allow_transition: bool,
+    ) -> None:
+        live = running if running is not None else self._running_game_observations(foreground)
         with self._automation_lock:
-            self._evaluate_foreground_locked(foreground, allow_transition=allow_transition)
+            self._evaluate_foreground_locked(foreground, running=live, allow_transition=allow_transition)
 
-    def _evaluate_foreground_locked(self, foreground: ForegroundApplication, *, allow_transition: bool) -> None:
-        match, evaluations = evaluate_game_rules(foreground, self._registry_games())
+    def _evaluate_foreground_locked(
+        self,
+        foreground: ForegroundApplication,
+        *,
+        running: tuple[ForegroundApplication, ...],
+        allow_transition: bool,
+    ) -> None:
         current_automation = self.snapshot().automation
+        match, evaluations = evaluate_running_game_rules(
+            foreground,
+            running,
+            self._registry_games(),
+            active_game_id=current_automation.active_game_id,
+        )
         evaluated = replace(current_automation, last_match=match, rule_evaluations=evaluations)
         self.store.update(automation=evaluated)
         self.store.publish(
@@ -1390,20 +1618,28 @@ class CoreFacade:
             return
         if match is not None:
             match_game_id = match.game_id
-            if (
+            same_active_game = bool(
                 evaluated.active_game_id
                 and match_game_id is not None
                 and evaluated.active_game_id.casefold() == match_game_id.casefold()
-            ):
-                # A new PID is a real context transition even when the
-                # executable is the same. This is also the point at which a
-                # manual override is allowed to be superseded automatically.
+            )
+            if same_active_game:
+                previous_match = current_automation.last_match
+                previous_pid = previous_match.foreground.pid if previous_match is not None else None
+                selected_pid = match.foreground.pid
+                # Alt+Tab keeps the same live process active. A different PID
+                # for the same rule is a genuine process restart and must
+                # re-run automation, including superseding a manual override.
+                if previous_pid is None or selected_pid is None or previous_pid == selected_pid:
+                    return
                 self._deactivate_game(reason="game_process_change", apply_exit=False, clear_previous=False)
-            elif evaluated.active_game_id is not None:
+                self._activate_game(match_game_id)
+                return
+            if evaluated.active_game_id is not None:
                 self._deactivate_game(reason="game_change", apply_exit=False, clear_previous=False)
             self._activate_game(match_game_id)
         elif evaluated.active_game_id is not None:
-            self._deactivate_game(reason="foreground_exit")
+            self._deactivate_game(reason="game_process_exit")
 
     def _activate_game(self, game_id: str | None) -> None:
         if game_id is None:
@@ -1640,6 +1876,9 @@ class CoreFacade:
             # at the same time. Disabling first keeps the teardown deterministic.
             self._disable_exclusive(reason="compatibility_mode_change")
         current = self.snapshot().compatibility
+        if mode != CompatibilityMode.REMAP and self._input_isolation.status().active:
+            self._disable_input_isolation(reason="compatibility_mode_change")
+            current = self.snapshot().compatibility
         if current.mode == mode:
             if manual:
                 self._mark_manual_override()

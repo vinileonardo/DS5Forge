@@ -21,6 +21,8 @@ import {
   HapticsTestRunSchema,
   ExclusiveCapabilitySchema,
   ExclusiveStatusSchema,
+  InputIsolationCapabilitySchema,
+  InputIsolationStatusSchema,
   LightbarSchema,
   PlayerLedSchema,
   MappingsResponseSchema,
@@ -61,6 +63,8 @@ import {
   type TriggerEffect,
   type ExclusiveStatus,
   type DuplicateInputDiagnostic,
+  type InputIsolationCapability,
+  type InputIsolationStatus,
 } from "./contracts";
 import { ApiError, ApiProtocolError } from "./errors";
 
@@ -287,6 +291,14 @@ export const api = {
     request<{ conflicts: ConflictDiagnostic[] }>("/diagnostics/conflicts", ConflictDiagnosticsResponseSchema),
   duplicateInputDiagnostics: () =>
     request<DuplicateInputDiagnostic>("/diagnostics/duplicate-input", DuplicateInputDiagnosticSchema),
+  inputIsolationCapabilities: () =>
+    request<InputIsolationCapability>("/input-isolation/capabilities", InputIsolationCapabilitySchema),
+  inputIsolationStatus: () =>
+    request<InputIsolationStatus>("/input-isolation/status", InputIsolationStatusSchema),
+  enableInputIsolation: () =>
+    request<InputIsolationStatus>("/input-isolation/enable", InputIsolationStatusSchema, jsonPost()),
+  disableInputIsolation: () =>
+    request<InputIsolationStatus>("/input-isolation/disable", InputIsolationStatusSchema, jsonPost()),
   exclusiveCapabilities: () => request("/exclusive/capabilities", ExclusiveCapabilitySchema),
   exclusiveStatus: () => request<ExclusiveStatus>("/exclusive/status", ExclusiveStatusSchema),
   enableExclusive: () => request<ExclusiveStatus>("/exclusive/enable", ExclusiveStatusSchema, jsonPost()),

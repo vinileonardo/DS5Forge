@@ -44,6 +44,8 @@ from .schemas import (
     HapticsTestRequest,
     HapticsTestRunResponse,
     HealthResponse,
+    InputIsolationCapabilityResponse,
+    InputIsolationStatusResponse,
     LifecycleResponse,
     LightbarApplyRequest,
     LightbarResponse,
@@ -422,6 +424,22 @@ def create_app(
     @app.get(f"{API_PREFIX}/diagnostics/duplicate-input", response_model=DuplicateInputDiagnosticResponse)
     async def duplicate_input_diagnostics() -> dict[str, Any]:
         return facade.duplicate_input_diagnostics()
+
+    @app.get(f"{API_PREFIX}/input-isolation/capabilities", response_model=InputIsolationCapabilityResponse)
+    async def input_isolation_capabilities() -> dict[str, Any]:
+        return facade.input_isolation_capability()
+
+    @app.get(f"{API_PREFIX}/input-isolation/status", response_model=InputIsolationStatusResponse)
+    async def input_isolation_status() -> dict[str, Any]:
+        return facade.input_isolation_status()
+
+    @app.post(f"{API_PREFIX}/input-isolation/enable", response_model=InputIsolationStatusResponse)
+    async def enable_input_isolation() -> dict[str, Any]:
+        return facade.enable_input_isolation()
+
+    @app.post(f"{API_PREFIX}/input-isolation/disable", response_model=InputIsolationStatusResponse)
+    async def disable_input_isolation() -> dict[str, Any]:
+        return facade.disable_input_isolation()
 
     @app.get(f"{API_PREFIX}/exclusive/capabilities", response_model=ExclusiveCapabilityResponse)
     async def exclusive_capabilities() -> dict[str, Any]:

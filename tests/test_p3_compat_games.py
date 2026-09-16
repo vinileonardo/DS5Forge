@@ -12,7 +12,12 @@ from unittest.mock import Mock
 
 from dualsense_companion.core.config import ConfigRepository, default_controller_profile
 from dualsense_companion.core.facade import CoreFacade
-from dualsense_companion.core.game_automation import ForegroundWorker, conflict_diagnostics, evaluate_game_rules
+from dualsense_companion.core.game_automation import (
+    ForegroundWorker,
+    conflict_diagnostics,
+    evaluate_game_rules,
+    evaluate_running_game_rules,
+)
 from dualsense_companion.core.games_repository import (
     GameRegistryRepository,
     GameRegistryValidationError,
@@ -105,14 +110,25 @@ class FailingForegroundDetector:
 
 
 class FakeProcessInspector:
-    def __init__(self, names=None, error=None):
+    def __init__(self, names=None, error=None, applications=None):
         self.names = names
         self.error = error
+        self.applications = applications
 
     def running_processes(self):
         if self.error:
             raise self.error
         return None if self.names is None else set(self.names)
+
+    def running_applications(self, executable_names=None):
+        if self.error:
+            raise self.error
+        if self.applications is None:
+            return None
+        expected = {str(name).casefold() for name in executable_names or ()}
+        return tuple(
+            item for item in self.applications if not expected or (item.executable_name or "").casefold() in expected
+        )
 
 
 def make_config_repository(root: Path) -> ConfigRepository:
@@ -178,6 +194,28 @@ class P3DomainTests(unittest.TestCase):
         self.assertEqual([item.action for item in evaluations], ["activate", "none"])
         self.assertTrue(evaluations[0].matched)
         self.assertTrue(evaluations[1].matched)
+
+    def test_running_process_lifecycle_keeps_background_game_and_prioritizes_foreground(self):
+        games = (
+            GameDefinition(id="a", name="A", executables=("a.exe",)),
+            GameDefinition(id="b", name="B", executables=("b.exe",)),
+        )
+        a = foreground("a.exe", 10)
+        b = foreground("b.exe", 11)
+        desktop = ForegroundApplication.desktop(now=3)
+
+        match, evaluations = evaluate_running_game_rules(desktop, (a,), games, active_game_id="a")
+        self.assertEqual(match.game_id, "a")
+        self.assertIn("background", match.reason)
+        self.assertEqual([item.action for item in evaluations], ["activate", "none"])
+
+        match, evaluations = evaluate_running_game_rules(b, (a, b), games, active_game_id="a")
+        self.assertEqual(match.game_id, "b")
+        self.assertIn("foreground", match.reason)
+        self.assertTrue(all(item.matched for item in evaluations))
+
+        match, _ = evaluate_running_game_rules(desktop, (), games, active_game_id="a")
+        self.assertIsNone(match)
 
     def test_foreground_worker_converts_adapter_failure_and_shutdown_is_bounded(self):
         observations = []
@@ -589,6 +627,44 @@ class P3FacadeTests(unittest.TestCase):
                 facade.update_compatibility("native")
                 self.assertFalse(facade.snapshot().compatibility.virtual_input_active)
                 self.assertFalse(provider.started)
+            finally:
+                facade.stop()
+
+    def test_game_stays_active_after_alt_tab_until_registered_process_exits(self):
+        with tempfile.TemporaryDirectory() as temp:
+            a = foreground("a.exe", 10)
+            b = foreground("b.exe", 11, now=2)
+            inspector = FakeProcessInspector(applications=[a])
+            facade = make_facade(Path(temp), process_inspector=inspector)
+            try:
+                facade.add_game(game("a", "a.exe"))
+                facade.add_game(game("b", "b.exe"))
+                facade.update_automation({"enabled": True})
+
+                facade._on_foreground_observation(a, True)
+                self.assertEqual(facade.snapshot().automation.active_game_id, "a")
+
+                # Alt+Tab is only a foreground change. The registered process
+                # remains alive, so its automation/profile ownership remains.
+                facade._on_foreground_observation(ForegroundApplication.desktop(now=3), True)
+                self.assertEqual(facade.snapshot().automation.active_game_id, "a")
+                self.assertIn("background", facade.snapshot().automation.last_match.reason)
+
+                # If another registered live game becomes foreground, it gets
+                # priority without pretending the first process stopped.
+                inspector.applications = [a, b]
+                facade._on_foreground_observation(b, True)
+                self.assertEqual(facade.snapshot().automation.active_game_id, "b")
+
+                # Once B exits, A is still live and becomes the deterministic
+                # fallback even though the desktop owns foreground.
+                inspector.applications = [a]
+                facade._on_foreground_observation(ForegroundApplication.desktop(now=4), True)
+                self.assertEqual(facade.snapshot().automation.active_game_id, "a")
+
+                inspector.applications = []
+                facade._on_foreground_observation(ForegroundApplication.desktop(now=5), False)
+                self.assertIsNone(facade.snapshot().automation.active_game_id)
             finally:
                 facade.stop()
 

@@ -7,6 +7,7 @@ from pathlib import Path
 from ...core.config import ConfigRepository
 from ...core.exclusive_input import ExclusiveCoordinator
 from ...core.facade import CoreFacade
+from ...core.input_isolation import InputIsolationCoordinator
 from .audio_capture import WasapiLoopbackFactory
 from .dualsense_adapter import PyDualSenseFactory
 from .exclusive_provider import (
@@ -16,6 +17,7 @@ from .exclusive_provider import (
     WindowsHidMaestroProvider,
 )
 from .foreground import WindowsForegroundDetector
+from .hidhide import WindowsHidHideIsolationProvider
 from .keyboard_output import WindowsKeyboardOutput
 from .mouse_output import WindowsMouseOutput
 from .process_diagnostics import WindowsProcessInspector
@@ -59,4 +61,5 @@ def create_windows_facade(
         foreground_detector=WindowsForegroundDetector(),
         process_inspector=WindowsProcessInspector(),
         exclusive_coordinator=exclusive_coordinator or create_windows_exclusive_coordinator(),
+        input_isolation=InputIsolationCoordinator(WindowsHidHideIsolationProvider()),
     )

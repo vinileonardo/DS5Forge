@@ -45,6 +45,8 @@ class ErrorCode(StrEnum):
     EXCLUSIVE_ROLLBACK = "exclusive.rollback"
     EXCLUSIVE_MIRROR_FAILED = "exclusive.mirror_failed"
     EXCLUSIVE_HEARTBEAT_FAILED = "exclusive.heartbeat_failed"
+    INPUT_ISOLATION_UNAVAILABLE = "input_isolation.unavailable"
+    INPUT_ISOLATION_FAILED = "input_isolation.failed"
     PLATFORM_UNAVAILABLE = "platform.unavailable"
     API_VALIDATION = "api.validation"
     INTERNAL = "internal.error"

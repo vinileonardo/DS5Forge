@@ -19,12 +19,14 @@ import type {
   ExclusiveCapability,
   ExclusiveStatus,
   GameCandidate,
+  InputIsolationCapability,
+  InputIsolationStatus,
   GameDefinition,
   Mapping,
   RuleEvaluation,
 } from "../../lib/api/contracts";
 import { formatRuntimeError, useRuntime } from "../../lib/runtime/RuntimeProvider";
-import { useI18n } from "../../lib/i18n";
+import { useI18n, type Locale, type TranslationKey } from "../../lib/i18n";
 import { pickExecutable } from "../../lib/tauri/gamePicker";
 
 const EMPTY_GAME: GameDefinition = {
@@ -91,7 +93,7 @@ function generatedGameId(path: string): string {
 
 export function GamesPage() {
   const { runtime, profiles, coreStatus, stale, loading: runtimeLoading } = useRuntime();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [games, setGames] = useState<GameDefinition[]>([]);
   const [mappings, setMappings] = useState<Mapping[]>([]);
   const [chords, setChords] = useState<Chord[]>([]);
@@ -112,6 +114,10 @@ export function GamesPage() {
   const [exclusiveCapability, setExclusiveCapability] = useState<Awaited<
     ReturnType<typeof api.exclusiveCapabilities>
   > | null>(null);
+  const [inputIsolationCapability, setInputIsolationCapability] = useState<InputIsolationCapability | null>(
+    null,
+  );
+  const [inputIsolationStatus, setInputIsolationStatus] = useState<InputIsolationStatus | null>(null);
 
   const trustedRuntime = stale ? null : runtime;
   const automation = trustedRuntime?.automation;
@@ -162,9 +168,24 @@ export function GamesPage() {
     const capabilityRequest =
       typeof api.exclusiveCapabilities === "function" ? api.exclusiveCapabilities() : null;
     const statusRequest = typeof api.exclusiveStatus === "function" ? api.exclusiveStatus() : null;
-    void Promise.allSettled([capabilityRequest, statusRequest]).then(([capability, status]) => {
+    const isolationCapabilityRequest =
+      typeof api.inputIsolationCapabilities === "function" ? api.inputIsolationCapabilities() : null;
+    const isolationStatusRequest =
+      typeof api.inputIsolationStatus === "function" ? api.inputIsolationStatus() : null;
+    void Promise.allSettled([
+      capabilityRequest,
+      statusRequest,
+      isolationCapabilityRequest,
+      isolationStatusRequest,
+    ]).then(([capability, status, isolationCapability, isolationStatus]) => {
       if (capability.status === "fulfilled" && capability.value) setExclusiveCapability(capability.value);
       if (status.status === "fulfilled" && status.value) setExclusiveStatus(status.value);
+      if (isolationCapability.status === "fulfilled" && isolationCapability.value) {
+        setInputIsolationCapability(isolationCapability.value);
+      }
+      if (isolationStatus.status === "fulfilled" && isolationStatus.value) {
+        setInputIsolationStatus(isolationStatus.value);
+      }
     });
   }, [coreStatus]);
 
@@ -209,6 +230,19 @@ export function GamesPage() {
     try {
       const next = enabled ? await api.enableExclusive() : await api.disableExclusive();
       setExclusiveStatus(next);
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function toggleInputIsolation(enabled: boolean) {
+    setPending("input-isolation");
+    setError(null);
+    try {
+      const next = enabled ? await api.enableInputIsolation() : await api.disableInputIsolation();
+      setInputIsolationStatus(next);
     } catch (reason) {
       setError(reason);
     } finally {
@@ -263,7 +297,9 @@ export function GamesPage() {
     setPending(`match-${id}`);
     try {
       const result = await api.testGameMatch(id);
-      setMatchReason(`${result.matched ? t("games.matched") : t("games.notMatched")}: ${result.reason}`);
+      setMatchReason(
+        `${result.matched ? t("games.matched") : t("games.notMatched")}: ${localizedGameReason(result.reason, locale)}`,
+      );
       setMatchEvaluations(result.evaluations);
     } catch (reason) {
       setError(reason);
@@ -438,7 +474,10 @@ export function GamesPage() {
                   <span>
                     <strong>{candidate.title || candidate.executable_name}</strong>
                     <small>
-                      {candidate.executable_path || candidate.executable_name} · {candidate.source}
+                      {candidate.executable_path || candidate.executable_name} ·{" "}
+                      {candidate.source === "running"
+                        ? t("games.candidateRunning")
+                        : t("games.candidateRecent")}
                     </small>
                   </span>
                   <Button variant="quiet" onClick={() => applyCandidate(candidate)}>
@@ -476,15 +515,21 @@ export function GamesPage() {
             </div>
             <div className="data-item">
               <dt>{t("games.outputReports")}</dt>
-              <dd>{String(exclusiveCapability?.virtual_output_reports ?? false)}</dd>
+              <dd>
+                {(exclusiveCapability?.virtual_output_reports ?? false) ? t("games.yes") : t("games.no")}
+              </dd>
             </div>
             <div className="data-item">
               <dt>{t("games.suppressionVerified")}</dt>
-              <dd>{String(exclusiveCapability?.physical_suppression_verified ?? false)}</dd>
+              <dd>
+                {(exclusiveCapability?.physical_suppression_verified ?? false)
+                  ? t("games.yes")
+                  : t("games.no")}
+              </dd>
             </div>
             <div className="data-item">
               <dt>{t("games.doubleInputRisk")}</dt>
-              <dd>{String(exclusiveStatus?.double_input_risk ?? true)}</dd>
+              <dd>{(exclusiveStatus?.double_input_risk ?? true) ? t("games.yes") : t("games.no")}</dd>
             </div>
           </dl>
         </Card>
@@ -544,8 +589,8 @@ export function GamesPage() {
                 <div>
                   <h2>{activeGame.name}</h2>
                   <p>
-                    {activeGame.executables.join(", ")} · {automation?.profile_origin ?? "—"} ·{" "}
-                    {t("games.profile")}
+                    {activeGame.executables.join(", ")} · {profileOriginLabel(automation?.profile_origin, t)}{" "}
+                    · {t("games.profile")}
                   </p>
                 </div>
               </div>
@@ -556,12 +601,14 @@ export function GamesPage() {
                 </div>
                 <div className="data-item">
                   <dt>{t("games.origin")}</dt>
-                  <dd>{automation?.profile_origin ?? "—"}</dd>
+                  <dd>{profileOriginLabel(automation?.profile_origin, t)}</dd>
                 </div>
                 <div className="data-item">
                   <dt>{t("games.rule")}</dt>
                   <dd>
-                    {typeof automation?.last_match?.reason === "string" ? automation.last_match.reason : "—"}
+                    {typeof automation?.last_match?.reason === "string"
+                      ? localizedGameReason(automation.last_match.reason, locale)
+                      : "—"}
                   </dd>
                 </div>
                 <div className="data-item">
@@ -623,21 +670,65 @@ export function GamesPage() {
             )}
             {currentCompatibility?.double_input_risk && (
               <Notice tone="warning" title={t("games.possibleDoubleInput")}>
-                {currentCompatibility.reason ?? t("games.possibleDoubleInputBody")}
+                {t("games.possibleDoubleInputBody")}
               </Notice>
             )}
+            <div className="input-isolation-panel">
+              <div>
+                <strong>{t("games.inputIsolationTitle")}</strong>
+                <p className="muted">{t("games.inputIsolationHelp")}</p>
+              </div>
+              <Toggle
+                label={t("games.inputIsolationToggle")}
+                description={
+                  inputIsolationStatus?.active
+                    ? t("games.inputIsolationActive")
+                    : currentCompatibility?.mode !== "remap"
+                      ? t("games.inputIsolationRemapOnly")
+                      : inputIsolationOperational(inputIsolationCapability)
+                        ? t("games.inputIsolationReady")
+                        : t("games.inputIsolationUnavailable")
+                }
+                checked={inputIsolationStatus?.active ?? false}
+                disabled={
+                  pending !== null ||
+                  stale ||
+                  currentCompatibility?.mode !== "remap" ||
+                  !inputIsolationOperational(inputIsolationCapability)
+                }
+                onChange={(value) => void toggleInputIsolation(value)}
+              />
+              <dl className="data-list compact-data-list">
+                <div className="data-item">
+                  <dt>{t("games.hidhideCloak")}</dt>
+                  <dd>{inputIsolationStatus?.cloak_enabled ? t("games.yes") : t("games.no")}</dd>
+                </div>
+                <div className="data-item">
+                  <dt>{t("games.ds5forgeAllowed")}</dt>
+                  <dd>{inputIsolationStatus?.application_registered ? t("games.yes") : t("games.no")}</dd>
+                </div>
+                <div className="data-item">
+                  <dt>{t("games.deviceHidden")}</dt>
+                  <dd>{inputIsolationStatus?.device_hidden ? t("games.yes") : t("games.no")}</dd>
+                </div>
+              </dl>
+            </div>
             <dl className="data-list">
               <div className="data-item">
                 <dt>{t("games.physicalVisible")}</dt>
-                <dd>{String(currentCompatibility?.physical_input_visible ?? true)}</dd>
+                <dd>
+                  {(currentCompatibility?.physical_input_visible ?? true) ? t("games.yes") : t("games.no")}
+                </dd>
               </div>
               <div className="data-item">
                 <dt>{t("games.virtualActive")}</dt>
-                <dd>{String(currentCompatibility?.virtual_input_active ?? false)}</dd>
+                <dd>
+                  {(currentCompatibility?.virtual_input_active ?? false) ? t("games.yes") : t("games.no")}
+                </dd>
               </div>
               <div className="data-item">
                 <dt>{t("games.doubleInputRisk")}</dt>
-                <dd>{String(currentCompatibility?.double_input_risk ?? false)}</dd>
+                <dd>{(currentCompatibility?.double_input_risk ?? false) ? t("games.yes") : t("games.no")}</dd>
               </div>
             </dl>
           </div>
@@ -736,11 +827,11 @@ export function GamesPage() {
                 <div className="subsystem" key={evaluation.game_id}>
                   <span>
                     {evaluation.game_name}
-                    <small className="muted">{evaluation.reason}</small>
+                    <small className="muted">{localizedGameReason(evaluation.reason, locale)}</small>
                   </span>
                   <StatusPill
                     tone={evaluation.matched ? "success" : "neutral"}
-                    label={evaluation.matched ? evaluation.action : t("games.notMatched")}
+                    label={evaluation.matched ? ruleActionLabel(evaluation.action, t) : t("games.notMatched")}
                   />
                 </div>
               ))}
@@ -1181,11 +1272,17 @@ export function GamesPage() {
               <div className="subsystem" key={item.process}>
                 <span>
                   {item.process}
-                  <small className="muted">{item.message}</small>
+                  <small className="muted">{localizedConflictMessage(item, locale)}</small>
                 </span>
                 <StatusPill
                   tone={conflictTone(item)}
-                  label={item.running ? item.severity : t("games.notDetected")}
+                  label={
+                    item.running
+                      ? item.severity === "warning"
+                        ? t("games.conflictWarning")
+                        : t("games.conflictInfo")
+                      : t("games.notDetected")
+                  }
                 />
               </div>
             ))}
@@ -1217,4 +1314,70 @@ function exclusiveOperational(capability: ExclusiveCapability | null): boolean {
     capability.provenance.integrity_verified &&
     capability.provenance.windows_validated,
   );
+}
+
+function inputIsolationOperational(capability: InputIsolationCapability | null): boolean {
+  return Boolean(
+    capability?.installed &&
+    capability.available &&
+    capability.application_path &&
+    capability.device_detected &&
+    capability.device_instance_path,
+  );
+}
+
+function profileOriginLabel(
+  origin: "manual" | "automatic" | undefined,
+  t: (key: TranslationKey) => string,
+): string {
+  if (origin === "automatic") return t("games.originAutomatic");
+  if (origin === "manual") return t("games.originManual");
+  return "—";
+}
+
+function ruleActionLabel(action: string, t: (key: TranslationKey) => string): string {
+  if (action === "activate") return t("games.actionActivate");
+  if (action === "none") return t("games.actionNone");
+  return action;
+}
+
+function localizedGameReason(reason: string, locale: Locale): string {
+  if (locale !== "pt-BR") return reason;
+  const exact: Record<string, string> = {
+    "Executable name and configured path matched.": "O executável corresponde à regra configurada.",
+    "Configured process is running and currently owns foreground priority.":
+      "O processo configurado está em execução e tem prioridade por estar em primeiro plano.",
+    "Configured process is still running in the background.":
+      "O processo configurado continua em execução em segundo plano.",
+    "Configured process is running.": "O processo configurado está em execução.",
+    "Configured process is running, but another live game currently has priority.":
+      "O processo configurado está em execução, mas outro jogo aberto tem prioridade no momento.",
+    "No configured executable for this rule is currently running.":
+      "Nenhum executável configurado para esta regra está em execução.",
+    "Rule is disabled.": "A regra está desativada.",
+    "No live foreground process is available.": "Nenhum processo em primeiro plano está disponível.",
+    "Executable name matched, but its full path was unavailable.":
+      "O nome do executável corresponde, mas o caminho completo não pôde ser verificado.",
+    "No registered game rule matched the foreground executable.":
+      "Nenhuma regra de jogo corresponde ao executável observado.",
+    "No registered game rule matched a running process.":
+      "Nenhuma regra de jogo corresponde a um processo em execução.",
+  };
+  if (exact[reason]) return exact[reason];
+  if (reason.startsWith("Executable path does not match")) {
+    return "O caminho do executável não corresponde ao caminho configurado para esta regra.";
+  }
+  if (reason.startsWith("Executable '") && reason.includes("does not match any configured executable")) {
+    return "O executável observado não corresponde aos executáveis configurados para esta regra.";
+  }
+  return "O estado da regra foi atualizado pelo núcleo local.";
+}
+
+function localizedConflictMessage(item: ConflictDiagnostic, locale: Locale): string {
+  if (locale !== "pt-BR") return item.message;
+  if (!item.running) return `${item.process} não foi detectado.`;
+  if (item.process.toLowerCase() === "steam.exe") {
+    return "A Steam está em execução. O Steam Input pode afetar o controle dependendo da configuração do jogo.";
+  }
+  return `${item.process} está em execução e pode remapear ou virtualizar a entrada do controle.`;
 }

@@ -9,7 +9,7 @@ from collections.abc import Callable
 from ..diagnostics.logging import get_logger
 from ..domain.errors import DS5ForgeError, ErrorCode
 from .dsp import Biquad, EnvelopeFollower, map_rumble_level, pcm_float32
-from .ports import AudioCaptureFactory
+from .ports import AudioCapture, AudioCaptureFactory
 
 LOGGER = get_logger(__name__)
 
@@ -44,11 +44,24 @@ class HapticsService(threading.Thread):
         self.on_error = on_error
         self.clock = clock
         self.stop_event = threading.Event()
+        self._capture_lock = threading.RLock()
+        self._active_capture: AudioCapture | None = None
         self.last_left = -1
         self.last_right = -1
 
     def stop(self, *, join_timeout: float = 3.0) -> None:
         self.stop_event.set()
+        # WASAPI reads can block beyond the nominal chunk interval on device
+        # changes/teardown. Close the active capture from the caller thread so
+        # PortAudio wakes the worker instead of leaving a non-daemon thread
+        # alive and preventing the packaged sidecar from exiting.
+        with self._capture_lock:
+            capture = self._active_capture
+        if capture is not None:
+            try:
+                capture.close()
+            except Exception:
+                LOGGER.debug("active audio capture close during stop failed", exc_info=True)
         self._set_motors(0, 0)
         if self.is_alive() and threading.current_thread() is not self:
             self.join(timeout=join_timeout)
@@ -69,12 +82,16 @@ class HapticsService(threading.Thread):
             try:
                 self._run_once()
             except DS5ForgeError as exc:
+                if self.stop_event.is_set():
+                    break
                 self._report_error(exc)
                 self._set_motors(0, 0)
                 if self.on_audio:
                     self.on_audio("error", None, exc.message)
                 self.stop_event.wait(2.0)
             except Exception as exc:
+                if self.stop_event.is_set():
+                    break
                 wrapped = DS5ForgeError(ErrorCode.AUDIO_CAPTURE_FAILED, "Audio haptics worker failed.", detail=str(exc))
                 LOGGER.exception("unexpected haptics worker failure", extra={"event": "audio.worker"})
                 self._report_error(wrapped)
@@ -89,49 +106,56 @@ class HapticsService(threading.Thread):
     def _run_once(self) -> None:
         assert self.capture_factory is not None
         with self.capture_factory.open() as capture:
-            if self.on_audio:
-                self.on_audio("listening", capture.name, None)
-            config = self.config_provider()
-            rate = capture.sample_rate
-            lp = Biquad.lowpass(rate, config["heavy_cutoff_hz"])
-            bp = Biquad.bandpass(rate, config["texture_center_hz"])
-            fast_l = EnvelopeFollower(config["fast_attack_ms"], config["fast_release_ms"], self.CHUNK_MS)
-            base_l = EnvelopeFollower(config["baseline_attack_ms"], config["baseline_release_ms"], self.CHUNK_MS)
-            fast_r = EnvelopeFollower(config["fast_attack_ms"], config["fast_release_ms"] * 0.7, self.CHUNK_MS)
-            last_device_check = self.clock()
+            with self._capture_lock:
+                self._active_capture = capture
+            try:
+                if self.on_audio:
+                    self.on_audio("listening", capture.name, None)
+                config = self.config_provider()
+                rate = capture.sample_rate
+                lp = Biquad.lowpass(rate, config["heavy_cutoff_hz"])
+                bp = Biquad.bandpass(rate, config["texture_center_hz"])
+                fast_l = EnvelopeFollower(config["fast_attack_ms"], config["fast_release_ms"], self.CHUNK_MS)
+                base_l = EnvelopeFollower(config["baseline_attack_ms"], config["baseline_release_ms"], self.CHUNK_MS)
+                fast_r = EnvelopeFollower(config["fast_attack_ms"], config["fast_release_ms"] * 0.7, self.CHUNK_MS)
+                last_device_check = self.clock()
 
-            while not self.stop_event.is_set():
-                if self.reload_event.is_set():
-                    self.reload_event.clear()
-                    break
-                now = self.clock()
-                if now - last_device_check >= self.DEVICE_CHECK_SECONDS:
-                    last_device_check = now
-                    if capture.default_output_changed():
+                while not self.stop_event.is_set():
+                    if self.reload_event.is_set():
+                        self.reload_event.clear()
                         break
-                data = capture.read()
-                if not self.enabled_provider():
-                    self._set_motors(0, 0)
-                    self._report_envelope(0.0)
-                    continue
-                samples = pcm_float32(data, capture.channels)
-                low = lp.process(samples)
-                mid = bp.process(samples)
-                peak_low = max((abs(value) for value in low), default=0.0)
-                peak_mid = max((abs(value) for value in mid), default=0.0)
-                elf = fast_l.update(peak_low)
-                elb = base_l.update(peak_low)
-                transient = max(0.0, elf - elb)
-                erf = fast_r.update(peak_mid)
-                # Expose the real runtime audio envelope for the explicit
-                # DS5Forge-generated reactive trigger path only.
-                self._report_envelope(min(1.0, max(elf, erf)))
-                # Mapping-only parameters remain live without rebuilding the
-                # WASAPI stream/filter state, matching the upstream behavior.
-                mapping_config = self.config_provider()
-                left = map_rumble_level(elf, transient, mapping_config, texture=False)
-                right = map_rumble_level(erf, transient * 0.5, mapping_config, texture=True)
-                self._set_motors(left, right)
+                    now = self.clock()
+                    if now - last_device_check >= self.DEVICE_CHECK_SECONDS:
+                        last_device_check = now
+                        if capture.default_output_changed():
+                            break
+                    data = capture.read()
+                    if not self.enabled_provider():
+                        self._set_motors(0, 0)
+                        self._report_envelope(0.0)
+                        continue
+                    samples = pcm_float32(data, capture.channels)
+                    low = lp.process(samples)
+                    mid = bp.process(samples)
+                    peak_low = max((abs(value) for value in low), default=0.0)
+                    peak_mid = max((abs(value) for value in mid), default=0.0)
+                    elf = fast_l.update(peak_low)
+                    elb = base_l.update(peak_low)
+                    transient = max(0.0, elf - elb)
+                    erf = fast_r.update(peak_mid)
+                    # Expose the real runtime audio envelope for the explicit
+                    # DS5Forge-generated reactive trigger path only.
+                    self._report_envelope(min(1.0, max(elf, erf)))
+                    # Mapping-only parameters remain live without rebuilding the
+                    # WASAPI stream/filter state, matching the upstream behavior.
+                    mapping_config = self.config_provider()
+                    left = map_rumble_level(elf, transient, mapping_config, texture=False)
+                    right = map_rumble_level(erf, transient * 0.5, mapping_config, texture=True)
+                    self._set_motors(left, right)
+            finally:
+                with self._capture_lock:
+                    if self._active_capture is capture:
+                        self._active_capture = None
         self._set_motors(0, 0)
         self._report_envelope(0.0)
 

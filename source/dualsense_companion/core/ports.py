@@ -7,6 +7,7 @@ from contextlib import AbstractContextManager
 from typing import Protocol
 
 from ..domain.games import ForegroundApplication, VirtualControllerCapability
+from ..domain.input_isolation import InputIsolationCapability, InputIsolationStatus
 from ..domain.models import (
     BatterySnapshot,
     ControllerCapabilities,
@@ -124,6 +125,20 @@ class PhysicalInputSuppressionProvider(Protocol):
     def disable(self, *, token: str, generation: int) -> None: ...
 
     def recover_stale(self) -> None: ...
+
+
+class PhysicalInputIsolationProvider(Protocol):
+    """Explicit physical-device isolation used by Remap anti-double-input."""
+
+    def capability(self) -> InputIsolationCapability: ...
+
+    def status(self) -> InputIsolationStatus: ...
+
+    def enable(self) -> InputIsolationStatus: ...
+
+    def disable(self) -> InputIsolationStatus: ...
+
+    def recover_stale(self) -> bool: ...
 
 
 class VirtualOutputReportSource(Protocol):

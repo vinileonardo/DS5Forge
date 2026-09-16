@@ -418,6 +418,37 @@ export const DuplicateInputDiagnosticSchema = z
   })
   .strict();
 
+export const InputIsolationCapabilitySchema = z
+  .object({
+    provider: z.string(),
+    installed: z.boolean(),
+    available: z.boolean(),
+    version: z.string().nullable(),
+    executable: z.string().nullable(),
+    application_path: z.string().nullable(),
+    device_detected: z.boolean(),
+    device_instance_path: z.string().nullable(),
+    reason: z.string().nullable(),
+  })
+  .strict();
+
+export const InputIsolationStatusSchema = z
+  .object({
+    active: z.boolean(),
+    owned: z.boolean(),
+    cloak_enabled: z.boolean(),
+    application_registered: z.boolean(),
+    device_hidden: z.boolean(),
+    physical_input_visible: z.boolean(),
+    double_input_risk: z.boolean(),
+    device_instance_path: z.string().nullable(),
+    capability: InputIsolationCapabilitySchema,
+    reason: z.string().nullable(),
+    last_error: z.string().nullable(),
+    updated_at: finiteNumber,
+  })
+  .strict();
+
 export const GameActivatedEventSchema = z
   .object({
     game: GameDefinitionSchema,
@@ -832,6 +863,8 @@ export type GameCandidate = z.infer<typeof GameCandidateSchema>;
 export type ExclusiveCapability = z.infer<typeof ExclusiveCapabilitySchema>;
 export type ExclusiveStatus = z.infer<typeof ExclusiveStatusSchema>;
 export type DuplicateInputDiagnostic = z.infer<typeof DuplicateInputDiagnosticSchema>;
+export type InputIsolationCapability = z.infer<typeof InputIsolationCapabilitySchema>;
+export type InputIsolationStatus = z.infer<typeof InputIsolationStatusSchema>;
 export type GameMatch = z.infer<typeof GameMatchSchema>;
 export type GameMatchResponse = z.infer<typeof GameMatchResponseSchema>;
 export type GameActivatedEvent = z.infer<typeof GameActivatedEventSchema>;
