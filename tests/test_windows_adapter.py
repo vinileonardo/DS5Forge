@@ -312,7 +312,7 @@ class WindowsAdapterTests(unittest.TestCase):
         package.hidguardian = hidguardian
         hidapi = types.ModuleType("hidapi")
         hidapi.enumerate = lambda **_kwargs: [other_interface, gamepad_interface]
-        hidapi.Device = lambda *, info: (opened.append(info.path) or FakeHidDevice(info))
+        hidapi.Device = lambda *, info: opened.append(info.path) or FakeHidDevice(info)
 
         with patch.dict(
             sys.modules,

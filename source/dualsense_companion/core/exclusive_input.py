@@ -77,7 +77,9 @@ class ExclusiveCoordinator:
             try:
                 virtual = self.virtual_provider.capability()
                 suppression = self.suppression_provider.capability()
-                physical_output = self.physical_output_sink.capability() if self.physical_output_sink is not None else None
+                physical_output = (
+                    self.physical_output_sink.capability() if self.physical_output_sink is not None else None
+                )
             except Exception as exc:
                 return ExclusiveCapability(reason=f"Exclusive provider capability probe failed: {exc}")
             provenance = _coerce_provenance(getattr(virtual, "provenance", None), getattr(virtual, "provider", None))
@@ -105,9 +107,7 @@ class ExclusiveCoordinator:
                 str(getattr(physical_output, "reason", ""))
                 if not physical_output_passthrough and physical_output is not None
                 else (
-                    "Physical DualSense output passthrough is unavailable."
-                    if not physical_output_passthrough
-                    else ""
+                    "Physical DualSense output passthrough is unavailable." if not physical_output_passthrough else ""
                 ),
                 "Physical suppression is not session-verified." if not suppression_verified else "",
             ]

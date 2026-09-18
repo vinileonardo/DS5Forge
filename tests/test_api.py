@@ -368,10 +368,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             drift_estimate = await client.post(
                 "/api/v1/controller/sticks/calibration/estimate",
                 json={
-                    "samples": [
-                        {"left_x": 0.04, "left_y": -0.03, "right_x": -0.02, "right_y": 0.01}
-                        for _ in range(60)
-                    ]
+                    "samples": [{"left_x": 0.04, "left_y": -0.03, "right_x": -0.02, "right_y": 0.01} for _ in range(60)]
                 },
             )
             self.assertEqual(drift_estimate.status_code, 200)

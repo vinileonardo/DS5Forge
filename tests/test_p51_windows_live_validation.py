@@ -197,7 +197,7 @@ def test_hidhide_resolves_active_controller_path_when_multiple_dualsense_are_pre
             "baseContainerDeviceInstancePath": r"USB\VID_054C&PID_0CE6\2&1420F598&0&1",
         }
         runner = FakeHidHideRunner(extra_devices=[other_device])
-        hid_path = br"\\?\HID#VID_054C&PID_0CE6&MI_03#8&1121ad8a&0&0000#{4D1E55B2-F16F-11CF-88CB-001111000030}"
+        hid_path = rb"\\?\HID#VID_054C&PID_0CE6&MI_03#8&1121ad8a&0&0000#{4D1E55B2-F16F-11CF-88CB-001111000030}"
         provider = make_provider(root, runner, target_hid_path_getter=lambda: hid_path)
 
         capability = provider.capability()

@@ -61,8 +61,7 @@ def main() -> int:
         actual = sha256(archive_path)
         if actual.lower() != HIDMAESTRO_ZIP_SHA256:
             raise RuntimeError(
-                "HIDMaestro archive integrity check failed: "
-                f"expected {HIDMAESTRO_ZIP_SHA256}, got {actual}"
+                f"HIDMaestro archive integrity check failed: expected {HIDMAESTRO_ZIP_SHA256}, got {actual}"
             )
         with zipfile.ZipFile(archive_path) as archive:
             dll_member = find_member(archive, "HIDMaestro.Core.dll")

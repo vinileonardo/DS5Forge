@@ -110,9 +110,7 @@ class WindowsHidHideIsolationProvider:
             selected = _normalize_hid_instance(self.target_hid_path_getter())
             if selected:
                 matched = [
-                    device
-                    for device in wired
-                    if _normalize_hid_instance(device.get("deviceInstancePath")) == selected
+                    device for device in wired if _normalize_hid_instance(device.get("deviceInstancePath")) == selected
                 ]
                 if len(matched) == 1:
                     wired = matched
@@ -380,7 +378,9 @@ class WindowsHidHideExclusiveSuppressionProvider:
                 raise RuntimeError("Exclusive HidHide suppression ownership was lost")
             status = self.isolation.status()
             if not status.active or status.physical_input_visible:
-                raise RuntimeError(status.last_error or status.reason or "Exclusive HidHide suppression is no longer active")
+                raise RuntimeError(
+                    status.last_error or status.reason or "Exclusive HidHide suppression is no longer active"
+                )
 
     def disable(self, *, token: str, generation: int) -> None:
         owner = (token, generation)
@@ -390,7 +390,9 @@ class WindowsHidHideExclusiveSuppressionProvider:
             try:
                 status = self.isolation.disable()
                 if status.active or not status.physical_input_visible:
-                    raise RuntimeError(status.last_error or status.reason or "HidHide suppression teardown could not be verified")
+                    raise RuntimeError(
+                        status.last_error or status.reason or "HidHide suppression teardown could not be verified"
+                    )
             finally:
                 self._owner = None
 

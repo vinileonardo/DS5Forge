@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-FALLBACK_VERSION = "0.4.0-rc.9"
+FALLBACK_VERSION = "0.4.0-rc.10"
 
 
 def read_version() -> str:

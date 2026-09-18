@@ -49,8 +49,7 @@ def main() -> int:
         return 2
     if not dotnet_has_net10(dotnet):
         print(
-            ".NET 10 SDK is not installed in this build environment. "
-            "No system changes were attempted.",
+            ".NET 10 SDK is not installed in this build environment. No system changes were attempted.",
             file=sys.stderr,
         )
         return 2

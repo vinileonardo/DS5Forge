@@ -158,7 +158,9 @@ class ControllerService:
         return PhysicalOutputPassthroughCapability(
             available=available,
             verified=available,
-            reason=None if available else "The connected adapter does not expose verified raw DualSense output passthrough.",
+            reason=None
+            if available
+            else "The connected adapter does not expose verified raw DualSense output passthrough.",
         )
 
     def begin(self, *, token: str, generation: int) -> None:

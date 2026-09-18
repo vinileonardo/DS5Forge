@@ -120,8 +120,9 @@ def input_stack_snapshot() -> Any:
         "try { $location=(Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName 'DEVPKEY_Device_LocationInfo' -ErrorAction Stop).Data } catch {}; "
         "try { $service=(Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName 'DEVPKEY_Device_Service' -ErrorAction Stop).Data } catch {}; "
         "[pscustomobject]@{Class=$device.Class;FriendlyName=$device.FriendlyName;InstanceId=$device.InstanceId;Status=$device.Status;Parent=$parent;Location=$location;Service=$service} "
-        "}); [pscustomobject]@{processes=$processes;devices=$devices}"
-    , timeout=20.0)
+        "}); [pscustomobject]@{processes=$processes;devices=$devices}",
+        timeout=20.0,
+    )
 
 
 def xinput_snapshot() -> Any:
