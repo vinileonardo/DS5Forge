@@ -39,13 +39,14 @@ from ..domain.models import (
     PlayerLedState,
     RuntimeSnapshot,
     StickCalibration,
+    StickTelemetry,
     TriggerPreviewState,
     TriggerState,
     finite_number,
     normalize_controller_reading,
 )
 from .adaptive_triggers import AdaptiveTriggerEngine, AdaptiveTriggerStatus, ReactiveTriggerAdapter, TriggerSource
-from .calibration import calibrated_sticks
+from .calibration import analyze_stick_drift, calibrated_sticks
 from .config import (
     ConfigRepository,
     default_controller_profile,
@@ -137,6 +138,7 @@ class CoreFacade:
         self._stop_lock = threading.Lock()
         self._lab_lock = threading.RLock()
         self._disconnecting = False
+        self._native_game_output_passthrough_active = False
         self._last_exclusive_state_publish = 0.0
         self._preview_effect = TriggerState()
         self._last_profile_apply: dict[str, Any] | None = None
@@ -246,11 +248,14 @@ class CoreFacade:
             on_reading=self._on_reading,
             on_motors=self._on_motors,
         )
+        if self._exclusive.physical_output_sink is None:
+            self._exclusive.bind_physical_output_sink(self.controller)
         self._lightbar_animator = InterruptiblePulseAnimator(self._apply_lightbar_frame)
         self._adaptive_triggers = AdaptiveTriggerEngine(self.controller, output_supported=False, ttl_seconds=1.0)
         self._reactive_adapter = ReactiveTriggerAdapter()
         self._audio_envelope = 0.0
         self._adaptive_trigger_mode = AdaptiveTriggerMode.NATIVE.value
+        self._adaptive_trigger_strength = 45
         self._last_adaptive_status: AdaptiveTriggerStatus = self._adaptive_triggers.status
         self._telemetry = TelemetryPublisher(max_hz=30.0, on_publish=self._on_telemetry)
         self._trigger_preview = TriggerPreviewCoordinator(
@@ -288,6 +293,11 @@ class CoreFacade:
                     "recovered stale physical input isolation",
                     extra={"event": "input_isolation.recovered", "status": isolation_status.to_dict()},
                 )
+            elif isolation_status.active and not isolation_status.owned:
+                # An external/unowned HidHide state must never be silently
+                # reported as physically visible. Reconcile the runtime view
+                # without modifying the external HidHide configuration.
+                self._disable_input_isolation(reason="startup_reconcile")
         except DS5ForgeError as exc:
             self._record_error(exc)
         recovery = self._exclusive.recover()
@@ -465,10 +475,13 @@ class CoreFacade:
         # A disconnected core keeps the historical ``accepted=False`` no-op,
         # but a connected adapter that explicitly reports no rumble surface must
         # never be sent motor output.
-        if current.connection == ConnectionState.CONNECTED and not _capability_enabled(current.capabilities, "rumble"):
+        if current.connection != ConnectionState.CONNECTED or self.controller.adapter is None:
+            return False
+        if not _capability_enabled(current.capabilities, "rumble"):
             capability = current.capabilities.capability("rumble")
             raise CapabilityUnavailableError("rumble", capability.reason)
-        return self.controller.pulse(int(left), int(right), int(duration_ms) / 1000)
+        self.start_haptics_test(left=int(left), right=int(right), duration_ms=int(duration_ms))
+        return True
 
     def input_telemetry(self) -> ControllerTelemetry:
         return self.snapshot().telemetry
@@ -556,27 +569,69 @@ class CoreFacade:
             self._record_error(exc)
             status = self._input_isolation.status()
         current = self.snapshot().compatibility
-        if current.mode == CompatibilityMode.REMAP:
-            next_state = replace(
-                current,
-                physical_input_visible=status.physical_input_visible,
-                physical_suppression_active=False,
-                double_input_risk=True,
-                reason=(
-                    f"Physical isolation ended ({reason}); Remap may duplicate physical controller input."
-                    if status.last_error is None
-                    else f"Physical isolation teardown needs attention: {status.last_error}"
-                ),
-                changed_at=time.time(),
+        next_reason: str | None
+        if status.active and not status.owned:
+            next_reason = (
+                "The physical DualSense is still hidden by an external HidHide state that DS5Forge does not own. "
+                "Games and joy.cpl may receive no controller input until that HidHide state is disabled."
             )
-            self.store.update(compatibility=next_state)
-            self.store.publish(EventType.COMPATIBILITY_CHANGED.value, {"compatibility": next_state})
+        elif current.mode == CompatibilityMode.REMAP:
+            next_reason = (
+                f"Physical isolation ended ({reason}); Remap may duplicate physical controller input."
+                if status.last_error is None
+                else f"Physical isolation teardown needs attention: {status.last_error}"
+            )
+        else:
+            next_reason = status.reason
+        next_state = replace(
+            current,
+            physical_input_visible=status.physical_input_visible,
+            physical_suppression_active=status.active,
+            double_input_risk=(
+                not status.active if current.mode == CompatibilityMode.REMAP else current.double_input_risk
+            ),
+            reason=next_reason,
+            changed_at=time.time(),
+        )
+        self.store.update(compatibility=next_state)
+        self.store.publish(EventType.COMPATIBILITY_CHANGED.value, {"compatibility": next_state})
         return status
 
     def duplicate_input_diagnostics(self) -> dict[str, Any]:
         isolation = self._input_isolation.status()
-        compatibility = self.snapshot().compatibility
-        if compatibility.mode == CompatibilityMode.REMAP and isolation.active:
+        snapshot = self.snapshot()
+        compatibility = snapshot.compatibility
+        exclusive = snapshot.exclusive
+        if (
+            compatibility.mode == CompatibilityMode.NATIVE
+            and not exclusive.enabled
+            and not exclusive.virtual_input_active
+        ):
+            hidden_by_external_isolation = isolation.active and not isolation.owned
+            diagnostic = DuplicateInputDiagnostic(
+                risk=False,
+                physical_visible=isolation.physical_input_visible,
+                virtual_active=False,
+                suppression_verified=isolation.active,
+                exclusive_enabled=False,
+                severity="warning" if hidden_by_external_isolation else "success",
+                message=(
+                    "The physical DualSense is hidden by an external HidHide state. "
+                    "Games and joy.cpl may receive no controller input."
+                    if hidden_by_external_isolation
+                    else "Native mode is not creating a second controller input source in DS5Forge."
+                ),
+                evidence=(
+                    "compatibility_mode=native",
+                    "virtual_input_active=false",
+                    "exclusive_enabled=false",
+                    f"input_isolation_active={str(isolation.active).lower()}",
+                    f"input_isolation_owned={str(isolation.owned).lower()}",
+                    f"physical_input_visible={str(isolation.physical_input_visible).lower()}",
+                ),
+                checked_at=time.time(),
+            )
+        elif compatibility.mode == CompatibilityMode.REMAP and isolation.active:
             diagnostic = DuplicateInputDiagnostic(
                 risk=False,
                 physical_visible=isolation.physical_input_visible,
@@ -623,6 +678,53 @@ class CoreFacade:
         self._set_exclusive_status(status)
         return status
 
+    def _native_game_output_passthrough_requested(self, game: GameDefinition | None = None) -> bool:
+        if game is None:
+            active_game_id = self.snapshot().automation.active_game_id
+            if active_game_id is None:
+                return False
+            game = next(
+                (item for item in self._registry_games() if item.id.casefold() == active_game_id.casefold()),
+                None,
+            )
+        return bool(
+            game is not None
+            and game.compatibility_mode == CompatibilityMode.NATIVE
+            and game.adaptive_trigger_mode == AdaptiveTriggerMode.NATIVE
+        )
+
+    def _begin_native_game_output_passthrough(self) -> None:
+        if self._native_game_output_passthrough_active:
+            return
+        try:
+            self._native_game_output_passthrough_active = self.controller.begin_native_game_output_passthrough()
+        except DS5ForgeError:
+            raise
+        except Exception as exc:
+            raise DS5ForgeError(
+                ErrorCode.CONTROLLER_OUTPUT_FAILED,
+                "Native DualSense output passthrough could not start.",
+                detail=str(exc),
+            ) from exc
+        if self._native_game_output_passthrough_active:
+            LOGGER.info(
+                "native game now owns DualSense output reports",
+                extra={"event": "controller.native_output_passthrough_started"},
+            )
+
+    def _end_native_game_output_passthrough(self, *, reason: str) -> None:
+        if not self._native_game_output_passthrough_active:
+            return
+        try:
+            self.controller.end_native_game_output_passthrough()
+        except Exception as exc:
+            LOGGER.warning(
+                "native game output passthrough cleanup failed",
+                extra={"event": "controller.native_output_passthrough_ended", "reason": reason, "error": str(exc)},
+            )
+        finally:
+            self._native_game_output_passthrough_active = False
+
     def _start_exclusive_monitor(self) -> None:
         if self._exclusive_monitor is not None and self._exclusive_monitor.is_alive():
             return
@@ -664,6 +766,7 @@ class CoreFacade:
         value = mode.value if isinstance(mode, AdaptiveTriggerMode) else str(mode)
         previous = self._adaptive_trigger_mode
         self._adaptive_trigger_mode = value
+        self._adaptive_trigger_strength = game.adaptive_trigger_strength
         # Automatic game profile application must never overwrite saved static
         # trigger effects. Ownership is resolved exclusively here:
         #   native   -> leave native game behavior alone, clearing only an
@@ -673,6 +776,7 @@ class CoreFacade:
         #               over from real runtime signal.
         # None of these populate GAME_NATIVE with invented telemetry.
         force = value in {AdaptiveTriggerMode.OFF.value, AdaptiveTriggerMode.REACTIVE.value}
+        self._reactive_adapter.reset()
         status = self._adaptive_triggers.reset(reason=f"mode:{value}", force=force)
         self._publish_adaptive_trigger_status(status)
         if value != previous:
@@ -688,7 +792,9 @@ class CoreFacade:
             if self._adaptive_triggers.status.source == TriggerSource.OFF:
                 return
         self._adaptive_trigger_mode = AdaptiveTriggerMode.NATIVE.value
+        self._adaptive_trigger_strength = 45
         self._audio_envelope = 0.0
+        self._reactive_adapter.reset()
         status = self._adaptive_triggers.reset(reason=reason)
         self._publish_adaptive_trigger_status(status)
 
@@ -700,6 +806,7 @@ class CoreFacade:
         state = self._reactive_adapter.from_envelope(
             input_state=input_state,
             audio_envelope=self._audio_envelope,
+            strength_percent=self._adaptive_trigger_strength,
         )
         if state is None:
             status = self._adaptive_triggers.clear_source(TriggerSource.REACTIVE, reason="no_signal")
@@ -917,10 +1024,16 @@ class CoreFacade:
             capability = capabilities.capability("rumble")
             raise CapabilityUnavailableError("rumble", capability.reason)
         with self._lab_lock:
-            self._stop_haptics()
+            haptics = self._haptics
+            active_run = self._haptics_bench.run
+            already_running = active_run is not None and active_run.status == "running"
+            if haptics is not None and not already_running:
+                haptics.pause_output()
             try:
                 return self._haptics_bench.start(left=left, right=right, duration_ms=duration_ms)
             except DS5ForgeError as exc:
+                if haptics is not None and not already_running:
+                    haptics.resume_output()
                 self._record_error(exc)
                 self._restart_haptics_if_ready()
                 raise
@@ -939,6 +1052,24 @@ class CoreFacade:
             {"kind": "sticks.calibration_changed", "state": snapshot.to_dict()["stick_calibration"]},
         )
         return snapshot.stick_calibration
+
+    def estimate_stick_calibration(self, samples: list[StickTelemetry]) -> dict[str, Any]:
+        left = analyze_stick_drift((sample.left_x, sample.left_y) for sample in samples)
+        right = analyze_stick_drift((sample.right_x, sample.right_y) for sample in samples)
+        recommended = StickCalibration(
+            left_deadzone=left.recommended_deadzone,
+            right_deadzone=right.recommended_deadzone,
+            left_center_x=left.center_x,
+            left_center_y=left.center_y,
+            right_center_x=right.center_x,
+            right_center_y=right.center_y,
+        )
+        return {
+            "samples": len(samples),
+            "left": left.to_dict(),
+            "right": right.to_dict(),
+            "recommended_calibration": recommended.to_dict(),
+        }
 
     def gesture_config(self) -> GestureConfig:
         return self.snapshot().gesture_config
@@ -1663,9 +1794,14 @@ class CoreFacade:
                 self._set_compatibility_mode(game.compatibility_mode, manual=False, persist=False)
             self.apply_controller_profile(profile, name=game.profile, source=ProfileOrigin.AUTOMATIC)
             self._apply_adaptive_trigger_mode(game)
+            if self._native_game_output_passthrough_requested(game):
+                self._begin_native_game_output_passthrough()
+            else:
+                self._end_native_game_output_passthrough(reason="game_output_owned_by_ds5forge")
             self._remapper.set_game_context(game.id)
         except DS5ForgeError as exc:
             self._reset_adaptive_triggers(reason="activation_failed")
+            self._end_native_game_output_passthrough(reason="activation_failed")
             if mode_changed and self.snapshot().compatibility.mode != rollback_mode:
                 try:
                     self._set_compatibility_mode(rollback_mode, manual=False, persist=False)
@@ -1703,6 +1839,7 @@ class CoreFacade:
             diagnostic=None,
         )
         self.store.update(automation=updated)
+        self._select_game_audio_target(game)
         self.store.publish(
             EventType.GAME_ACTIVATED.value,
             {
@@ -1778,9 +1915,15 @@ class CoreFacade:
         game_id = automation.active_game_id
         if game_id is None:
             self._reset_adaptive_triggers(reason=reason)
+            self._end_native_game_output_passthrough(reason=reason)
             self._release_synthetic_outputs(reason)
+            self._clear_game_audio_target()
             return
+        # Clear DS5Forge-owned trigger state while generated writes are still
+        # suppressed. Releasing native passthrough afterwards restores one
+        # neutral report instead of briefly replaying the last reactive effect.
         self._reset_adaptive_triggers(reason=reason)
+        self._end_native_game_output_passthrough(reason=reason)
         self._release_synthetic_outputs(reason)
         self._remapper.set_game_context(None, release=False)
         policy = ExitPolicy.KEEP_CURRENT if automation.manual_override else automation.exit_policy
@@ -1825,6 +1968,7 @@ class CoreFacade:
             diagnostic=None,
         )
         self.store.update(automation=updated)
+        self._clear_game_audio_target()
         self.store.publish(
             EventType.GAME_DEACTIVATED.value,
             {
@@ -1949,6 +2093,10 @@ class CoreFacade:
         )
         self.store.update(compatibility=next_state)
         self.store.publish(EventType.COMPATIBILITY_CHANGED.value, {"compatibility": next_state})
+        if mode == CompatibilityMode.NATIVE and self._native_game_output_passthrough_requested():
+            self._begin_native_game_output_passthrough()
+        else:
+            self._end_native_game_output_passthrough(reason="compatibility_mode_change")
         if manual:
             self._mark_manual_override()
 
@@ -2088,6 +2236,18 @@ class CoreFacade:
         capabilities = self._active_capabilities()
         self._adaptive_triggers.set_output_supported(bool(getattr(capabilities, "adaptive_triggers", False)))
         self._reset_adaptive_triggers(reason="controller_connected")
+        active_game_id = self.snapshot().automation.active_game_id
+        if active_game_id is not None:
+            active_game = next(
+                (item for item in self._registry_games() if item.id.casefold() == active_game_id.casefold()),
+                None,
+            )
+            if active_game is not None:
+                # Reconnect reset must neutralize stale hardware state, but it
+                # must not silently erase the active game's explicit adaptive
+                # trigger ownership. Restore reactive/off/native semantics
+                # immediately after the adapter is ready again.
+                self._apply_adaptive_trigger_mode(active_game)
         self._telemetry.reset()
         self.touchpad.set_enabled(self.snapshot().touchpad_enabled)
         self._stop_haptics()
@@ -2097,11 +2257,11 @@ class CoreFacade:
             lambda: self.snapshot().rumble_enabled,
             capture_factory=self._capture_factory,
             reload_event=self._reload_audio,
+            on_motors=self._on_motors,
             on_audio=self._on_audio,
             on_envelope=self._on_audio_envelope,
             on_error=self._record_error,
         )
-        self._haptics.start()
         lightbar = self.snapshot().lightbar
         getter = getattr(adapter, "get_lightbar", None)
         if callable(getter):
@@ -2140,9 +2300,15 @@ class CoreFacade:
                 health=replace(current.health, subsystems={**current.health.subsystems, "audio": "starting"}),
             )
         )
+        self._haptics.start()
+        if self._native_game_output_passthrough_requested():
+            self._begin_native_game_output_passthrough()
+        else:
+            self._end_native_game_output_passthrough(reason="controller_reconnected")
 
     def _on_disconnected(self) -> None:
         self._disconnecting = True
+        self._native_game_output_passthrough_active = False
         self._lightbar_animator.stop()
         self._disable_exclusive(reason="controller_disconnected")
         self._reset_adaptive_triggers(reason="controller_disconnected")
@@ -2221,6 +2387,61 @@ class CoreFacade:
     def _on_motors(self, left: int, right: int) -> None:
         self.store.update(motors=MotorSnapshot(left, right))
 
+    def _select_game_audio_target(self, game: GameDefinition) -> None:
+        selector = getattr(self._capture_factory, "select_process", None)
+        if not callable(selector):
+            return
+        match = self.snapshot().automation.last_match
+        foreground = None
+        if match is not None and match.game_id is not None and match.game_id.casefold() == game.id.casefold():
+            foreground = match.foreground
+        if foreground is None or foreground.pid is None:
+            self._clear_game_audio_target()
+            LOGGER.warning(
+                "active game has no process id for process-loopback audio",
+                extra={"event": "audio.process_target_missing", "game_id": game.id},
+            )
+            return
+        pid = int(foreground.pid)
+        try:
+            changed = bool(
+                selector(
+                    pid,
+                    app_name=game.name,
+                    executable_name=foreground.executable_name,
+                )
+            )
+        except Exception as exc:
+            error = DS5ForgeError(
+                ErrorCode.AUDIO_CAPTURE_FAILED,
+                "Could not select the active game's audio process.",
+                detail=str(exc),
+                fields={"game_id": game.id, "pid": pid},
+            )
+            self._record_error(error)
+            self._on_audio("error", None, error.message)
+            return
+        if changed:
+            self._reload_audio.set()
+
+    def _clear_game_audio_target(self) -> None:
+        clearer = getattr(self._capture_factory, "clear_process", None)
+        if not callable(clearer):
+            return
+        try:
+            changed = bool(clearer())
+        except Exception as exc:
+            error = DS5ForgeError(
+                ErrorCode.AUDIO_CAPTURE_FAILED,
+                "Could not clear the active game audio process.",
+                detail=str(exc),
+            )
+            self._record_error(error)
+            self._on_audio("error", None, error.message)
+            return
+        if changed:
+            self._reload_audio.set()
+
     def _on_audio(self, status: str, device: str | None, error: str | None) -> None:
         def updater(current: RuntimeSnapshot) -> RuntimeSnapshot:
             subsystems = dict(current.health.subsystems)
@@ -2228,7 +2449,7 @@ class CoreFacade:
             degraded = set(current.health.degraded)
             if status == "error":
                 degraded.add("audio")
-            elif status in {"listening", "stopped"}:
+            elif status in {"listening", "stopped", "waiting"}:
                 degraded.discard("audio")
             return replace(
                 current,
@@ -2349,7 +2570,7 @@ class CoreFacade:
                 self._restart_haptics_if_ready()
 
     def _restart_haptics_if_ready(self) -> None:
-        if self._haptics is not None or not self._started or self._disconnecting:
+        if not self._started or self._disconnecting:
             return
         # Audio-driven rumble must stay paused for the whole duration of a bench
         # run. A duplicate start request is rejected as busy but must not resume
@@ -2359,12 +2580,16 @@ class CoreFacade:
             return
         if self.snapshot().connection != ConnectionState.CONNECTED:
             return
+        if self._haptics is not None:
+            self._haptics.resume_output()
+            return
         self._haptics = HapticsService(
             self.controller.set_motors,
             lambda: self._section("rumble"),
             lambda: self.snapshot().rumble_enabled,
             capture_factory=self._capture_factory,
             reload_event=self._reload_audio,
+            on_motors=self._on_motors,
             on_audio=self._on_audio,
             on_envelope=self._on_audio_envelope,
             on_error=self._record_error,

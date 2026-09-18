@@ -58,14 +58,16 @@ Current source-pass results:
 
 ## P5 automated coverage
 
-- Exclusive enable ordering, rollback, ownership generation, lease refresh only
-  on successful mirroring, public/provider heartbeat isolation, throttled
+- Exclusive enable ordering across virtual output → physical feedback passthrough
+  → selected-device suppression, rollback, ownership generation, lease refresh
+  only on successful mirroring, public/provider heartbeat isolation, throttled
   provider heartbeat, watchdog expiry,
   stale-recovery reporting (no event when nothing was recovered),
   mirroring/coalescing, duplicate-input risk, disconnect/shutdown idempotency
   and Remap-vs-Exclusive exclusion;
-- Exclusive sidecar finite request timeout, stderr pipe-deadlock avoidance and
-  `finally` process termination even when the release request fails;
+- Exclusive sidecar finite request timeout, stderr pipe-deadlock avoidance,
+  strict 64-byte USB DualSense report `0x02` validation, physical passthrough
+  forwarding and `finally` process termination even when release fails;
 - adaptive trigger arbitration (`game_native` → `telemetry` → `reactive` →
   `off`), TTL, coalescing, generated-effect labeling and reset, plus
   facade-level per-game `native`/`reactive`/`off` behavior, real audio-envelope
@@ -98,15 +100,19 @@ presentation contracts only; it does not prove hardware behavior.
 
 The following are not inferred from Linux tests, source inspection or a fake:
 
-- signed/provenanced HIDMaestro + HidHide helper installation and fixed hash;
-- real virtual output reports and full-state mirroring;
-- real HidHide session suppression, duplicate-input behavior and recovery after
-  helper crash, parent death, Core restart, Quit, updater and uninstall;
+- signed/provenanced HIDMaestro helper build/install and fixed hash;
+- explicit HIDMaestro UMDF2 driver installation/elevation and real virtual
+  DualSense creation with a stable DS5Forge identity key;
+- real virtual output reports, full-state mirroring and game-authored vibration/
+  adaptive-trigger/lightbar passthrough to the physical USB DualSense;
+- real core-owned HidHide selected-device suppression, duplicate-input behavior
+  and recovery after helper crash, parent death, Core restart, Quit, updater and
+  uninstall;
 - real Windows game launch/foreground matching and Native/Exclusive/Remapping
   behavior;
 - native adaptive-trigger output, real virtual-provider output-report feedback
-  for the `game_native` priority (not implemented in this source), reactive
-  effects on real hardware and physical TTL behavior;
+  for the `game_native` priority (core forwarding is implemented but not yet
+  hardware-validated), reactive effects on real hardware and physical TTL behavior;
 - physical lightbar intensity/effect, Player LEDs and interruptible pulse;
 - two simultaneous touch contacts/finger IDs and gesture teardown;
 - WASAPI loopback from the actual default output into DSP-driven rumble;

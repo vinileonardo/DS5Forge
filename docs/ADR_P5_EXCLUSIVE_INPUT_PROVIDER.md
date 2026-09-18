@@ -34,8 +34,11 @@ Exclusive is implemented as a platform-neutral coordinator with Windows-only
 provider adapters:
 
 - `VirtualControllerProvider`/`VirtualOutputReportSource` owns the virtual
-  report sink;
-- `PhysicalInputSuppressionProvider` owns session suppression;
+  report sink and captures game-authored DualSense output reports;
+- `PhysicalOutputReportSink` forwards those reports unchanged to the selected
+  physical USB DualSense while suppressing DS5Forge-generated competing writes;
+- `PhysicalInputSuppressionProvider` owns session suppression through the same
+  selected-device HidHide authority used by P5.1 Remap isolation;
 - `ExclusiveCoordinator` owns ordering, generation, ownership token,
   heartbeat/watchdog, mirroring, stale recovery and rollback;
 - clients consume immutable capability/status/diagnostic models and never
@@ -44,8 +47,9 @@ provider adapters:
 The transaction is:
 
 ```text
-probe -> verify capability/provenance -> start virtual -> suppress physical
-     -> heartbeat + mirror state -> unsuppress physical -> close virtual
+probe -> verify capability/provenance -> start virtual -> arm physical feedback passthrough
+     -> suppress physical -> heartbeat + mirror state + forward game feedback
+     -> close virtual -> restore normal physical output -> unsuppress physical
 ```
 
 If either start step fails, the coordinator tears down every step that did
@@ -54,12 +58,14 @@ and `double_input_risk=true`. A failed mirror, missed heartbeat, reconnect,
 shutdown, updater stop or uninstall path also disables the session and attempts
 neutral cleanup.
 
-The helper boundary is a fixed, versioned JSON-lines sidecar. It uses a fixed
-executable basename, pinned SHA-256, `shell=False`, parent PID, ownership token,
-generation and heartbeat. DS5Forge does not download, install, discover or
-execute an arbitrary provider command. There is no `pythonnet` boundary and no
-ViGEmBus dependency. Recovery is attempted at startup before a new session;
-the helper remains responsible for provider-specific stale cleanup.
+The HIDMaestro helper boundary is a fixed, versioned JSON-lines sidecar. It uses
+a fixed executable basename, pinned SHA-256, `shell=False`, parent PID,
+ownership token, generation and heartbeat. The helper owns only the virtual
+DualSense; HidHide remains in the Python core so active-device selection,
+allowlisting, rollback markers and stale recovery have one authority. DS5Forge
+does not execute an arbitrary provider command. There is no `pythonnet`
+boundary and no ViGEmBus dependency. Recovery is attempted at startup before a
+new session.
 
 Exclusive is OFF by default. Until every gate is true, the capability is
 non-operational and `/diagnostics/duplicate-input` reports risk. A visible
@@ -72,8 +78,9 @@ All of the following are required:
 | Gate | Required evidence |
 | --- | --- |
 | Provider availability/installation | fixed helper/provider is present and responds to the versioned protocol |
-| Output reports | real DualSense report submission is demonstrated, not inferred from a symbol name |
-| Suppression | session-scoped physical suppression is active and recoverable |
+| Virtual output reports | real DualSense report submission is demonstrated, not inferred from a symbol name |
+| Physical feedback passthrough | USB report `0x02` from the virtual DualSense is forwarded to the selected physical controller without pydualsense racing it |
+| Suppression | selected-device HidHide suppression is active, verified and recoverable |
 | Provenance | expected provider/helper identity and version are recorded |
 | Integrity | the fixed helper hash matches the pinned release value |
 | Signature | Authenticode/signing verification succeeds |

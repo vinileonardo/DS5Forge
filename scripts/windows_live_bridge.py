@@ -23,6 +23,7 @@ WS_URL = "ws://127.0.0.1:8765/api/v1/ws"
 WS_ORIGIN = "http://127.0.0.1:5173"
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend"
+XINPUT_PROBE = ROOT / "scripts" / "windows_xinput_probe.py"
 
 
 def http_json(path: str) -> Any:
@@ -39,7 +40,7 @@ def http_json(path: str) -> Any:
     return {"ok": True, "status": 200, "url": target, "body": _decode_json(raw)}
 
 
-def powershell_json(script: str) -> Any:
+def powershell_json(script: str, *, timeout: float = 10.0) -> Any:
     command = [
         "powershell.exe",
         "-NoProfile",
@@ -53,7 +54,7 @@ def powershell_json(script: str) -> Any:
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=10,
+        timeout=timeout,
         check=False,
     )
     if completed.returncode != 0:
@@ -104,6 +105,55 @@ def dualsense_snapshot() -> Any:
     )
 
 
+def input_stack_snapshot() -> Any:
+    """Inspect common input wrappers plus present game-controller PnP devices."""
+
+    return powershell_json(
+        "$names=@('steam.exe','DSX.exe','ds4windows.exe','rewasd.exe','joytokey.exe','antimicrox.exe','KingdomCome.exe'); "
+        "$processes=@(Get-CimInstance Win32_Process | Where-Object { $_.Name -in $names } | "
+        "Select-Object Name,ProcessId,ParentProcessId,ExecutablePath,CommandLine); "
+        "$devices=@(Get-PnpDevice -PresentOnly -Class HIDClass | Where-Object { "
+        "$_.InstanceId -match 'VID_054C&PID_0CE6' -or $_.FriendlyName -match 'Xbox|XINPUT|DualSense|Wireless Controller' "
+        "} | ForEach-Object { "
+        "$device=$_; $parent=$null; $location=$null; $service=$null; "
+        "try { $parent=(Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName 'DEVPKEY_Device_Parent' -ErrorAction Stop).Data } catch {}; "
+        "try { $location=(Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName 'DEVPKEY_Device_LocationInfo' -ErrorAction Stop).Data } catch {}; "
+        "try { $service=(Get-PnpDeviceProperty -InstanceId $device.InstanceId -KeyName 'DEVPKEY_Device_Service' -ErrorAction Stop).Data } catch {}; "
+        "[pscustomobject]@{Class=$device.Class;FriendlyName=$device.FriendlyName;InstanceId=$device.InstanceId;Status=$device.Status;Parent=$parent;Location=$location;Service=$service} "
+        "}); [pscustomobject]@{processes=$processes;devices=$devices}"
+    , timeout=20.0)
+
+
+def xinput_snapshot() -> Any:
+    """Probe the four Windows XInput slots without creating any device."""
+
+    try:
+        windows_path = subprocess.run(
+            ["wslpath", "-w", str(XINPUT_PROBE)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=3,
+            check=True,
+        ).stdout.strip()
+        completed = subprocess.run(
+            ["py.exe", "-3.12", windows_path],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            check=False,
+        )
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    raw = completed.stdout.strip()
+    if completed.returncode != 0:
+        return {"ok": False, "error": (completed.stderr or raw or "XInput probe failed").strip()}
+    return _decode_json(raw) if raw else {"ok": False, "error": "XInput probe returned no output"}
+
+
 def hidhide_snapshot() -> Any:
     cli = r"C:\Program Files\Nefarius Software Solutions\HidHide\x64\HidHideCLI.exe"
     script = (
@@ -144,6 +194,8 @@ def snapshot() -> dict[str, Any]:
         "windows": {
             "processes": process_snapshot(),
             "dualsense": dualsense_snapshot(),
+            "input_stack": input_stack_snapshot(),
+            "xinput": xinput_snapshot(),
             "hidhide": hidhide_snapshot(),
         },
     }
@@ -220,6 +272,8 @@ def main() -> int:
     api_parser.add_argument("path", help="Path under /api/v1, e.g. state or controller/lightbar")
     sub.add_parser("processes", help="Read installed ds5forge/ds5forge-core Windows processes")
     sub.add_parser("dualsense", help="Read present DualSense Windows PnP devices")
+    sub.add_parser("input-stack", help="Read common input wrappers and present controller PnP devices")
+    sub.add_parser("xinput", help="Read the four Windows XInput slots without creating a device")
     sub.add_parser("hidhide", help="Read HidHide cloak, allowlist and hidden-device state")
     ws_parser = sub.add_parser("ws", help="Read live local WebSocket events")
     ws_parser.add_argument("--count", type=int, default=5)
@@ -238,6 +292,12 @@ def main() -> int:
         return 0
     if command == "dualsense":
         print_json(dualsense_snapshot())
+        return 0
+    if command == "input-stack":
+        print_json(input_stack_snapshot())
+        return 0
+    if command == "xinput":
+        print_json(xinput_snapshot())
         return 0
     if command == "hidhide":
         print_json(hidhide_snapshot())

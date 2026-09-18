@@ -27,6 +27,7 @@ class FakeTrigger:
 class TriggerModes:
     Off = "off"
     Rigid = "rigid"
+    Rigid_A = "feedback"
     Pulse_AB = "pulse_ab"
 
 
@@ -96,6 +97,15 @@ class ControllerContractTests(unittest.TestCase):
         )
         self.assertEqual(left.mode, TriggerModes.Pulse_AB)
         self.assertEqual(left.forces[:3], [10, 80, 200])
+
+        adapter.set_triggers(
+            TriggerState(
+                left=AdaptiveTriggerEffect(mode="resistance", force=115),
+            )
+        )
+        self.assertEqual(left.mode, TriggerModes.Rigid_A)
+        self.assertEqual(left.forces, [255, 3, 219, 182, 109, 27, 0])
+
         adapter.reset_triggers()
         self.assertEqual(left.mode, TriggerModes.Off)
         self.assertEqual(left.forces, [0, 0, 0, 0, 0, 0, 0])

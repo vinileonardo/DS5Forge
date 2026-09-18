@@ -26,7 +26,7 @@ from ..domain.exclusive import (
     ProviderProvenance,
 )
 from ..domain.models import ControllerInput, ControllerReading
-from .ports import PhysicalInputSuppressionProvider, VirtualOutputReportSource
+from .ports import PhysicalInputSuppressionProvider, PhysicalOutputReportSink, VirtualOutputReportSource
 
 LOGGER = get_logger(__name__)
 
@@ -39,6 +39,7 @@ class ExclusiveCoordinator:
         virtual_provider: VirtualOutputReportSource | None = None,
         suppression_provider: PhysicalInputSuppressionProvider | None = None,
         output_source: VirtualOutputReportSource | None = None,
+        physical_output_sink: PhysicalOutputReportSink | None = None,
         *,
         heartbeat_timeout: float = 1.5,
         provider_heartbeat_interval: float = 0.5,
@@ -47,6 +48,7 @@ class ExclusiveCoordinator:
         self.virtual_provider = virtual_provider
         self.suppression_provider = suppression_provider
         self.output_source = output_source or virtual_provider
+        self.physical_output_sink = physical_output_sink
         self.heartbeat_timeout = max(0.25, float(heartbeat_timeout))
         self.provider_heartbeat_interval = max(0.1, min(self.heartbeat_timeout, float(provider_heartbeat_interval)))
         self.clock = clock
@@ -58,6 +60,14 @@ class ExclusiveCoordinator:
         self._mirrored_sequence = 0
         self._status = ExclusiveStatus(heartbeat_timeout_ms=int(self.heartbeat_timeout * 1000))
 
+    def bind_physical_output_sink(self, sink: PhysicalOutputReportSink) -> None:
+        """Attach the live controller output path before Exclusive is enabled."""
+
+        with self._lock:
+            if self._status.enabled:
+                raise RuntimeError("cannot replace the physical output sink while Exclusive is active")
+            self.physical_output_sink = sink
+
     def capability(self) -> ExclusiveCapability:
         """Probe both providers without changing runtime state."""
 
@@ -67,6 +77,7 @@ class ExclusiveCoordinator:
             try:
                 virtual = self.virtual_provider.capability()
                 suppression = self.suppression_provider.capability()
+                physical_output = self.physical_output_sink.capability() if self.physical_output_sink is not None else None
             except Exception as exc:
                 return ExclusiveCapability(reason=f"Exclusive provider capability probe failed: {exc}")
             provenance = _coerce_provenance(getattr(virtual, "provenance", None), getattr(virtual, "provider", None))
@@ -74,6 +85,11 @@ class ExclusiveCoordinator:
             provider_installed = bool(getattr(virtual, "installed", False))
             output_reports = bool(
                 getattr(virtual, "output_reports", False) or getattr(virtual, "virtual_output_reports", False)
+            )
+            physical_output_passthrough = bool(
+                physical_output is not None
+                and getattr(physical_output, "available", False)
+                and getattr(physical_output, "verified", False)
             )
             suppression_available = bool(getattr(suppression, "available", False))
             suppression_verified = bool(
@@ -86,6 +102,13 @@ class ExclusiveCoordinator:
                 if not provenance.verified
                 else "",
                 "Virtual output reports are not proven by the provider." if not output_reports else "",
+                str(getattr(physical_output, "reason", ""))
+                if not physical_output_passthrough and physical_output is not None
+                else (
+                    "Physical DualSense output passthrough is unavailable."
+                    if not physical_output_passthrough
+                    else ""
+                ),
                 "Physical suppression is not session-verified." if not suppression_verified else "",
             ]
             reason = next((item for item in reasons if item), "Verified provider and suppression are available.")
@@ -93,6 +116,7 @@ class ExclusiveCoordinator:
                 provider_available=provider_available,
                 provider_installed=provider_installed,
                 virtual_output_reports=output_reports,
+                physical_output_passthrough=physical_output_passthrough,
                 physical_suppression_available=suppression_available,
                 physical_suppression_verified=suppression_verified,
                 provenance=provenance,
@@ -144,18 +168,23 @@ class ExclusiveCoordinator:
                 updated_at=self.clock(),
             )
             virtual_started = False
+            physical_output_started = False
             suppression_started = False
             try:
                 virtual_provider = self.virtual_provider
                 suppression_provider = self.suppression_provider
+                physical_output_sink = self.physical_output_sink
                 assert virtual_provider is not None
                 assert suppression_provider is not None
+                assert physical_output_sink is not None
                 # Mark each step before calling into an external provider.
                 # Providers can fail after partially acquiring state; cleanup
                 # methods are required to be idempotent and will then release
                 # that partial acquisition during rollback.
                 virtual_started = True
                 virtual_provider.start(token=token, generation=self._generation)
+                physical_output_started = True
+                physical_output_sink.begin(token=token, generation=self._generation)
                 suppression_started = True
                 suppression_provider.enable(token=token, generation=self._generation)
                 self._token = token
@@ -180,6 +209,8 @@ class ExclusiveCoordinator:
                 # be left active when the physical side fails.
                 if suppression_started and suppression_provider is not None:
                     _best_effort(lambda: suppression_provider.disable(token=token, generation=self._generation))
+                if physical_output_started and physical_output_sink is not None:
+                    _best_effort(lambda: physical_output_sink.end(token=token, generation=self._generation))
                 if virtual_started and virtual_provider is not None:
                     _best_effort(lambda: virtual_provider.close(token=token, generation=self._generation))
                 self._token = None
@@ -211,16 +242,25 @@ class ExclusiveCoordinator:
             failures: list[str] = []
             suppression_provider = self.suppression_provider
             virtual_provider = self.virtual_provider
-            if token is not None and suppression_provider is not None:
-                try:
-                    suppression_provider.disable(token=token, generation=generation)
-                except Exception as exc:
-                    failures.append(f"suppression: {exc}")
+            physical_output_sink = self.physical_output_sink
+            # Remove the virtual device before revealing the physical one. A
+            # short no-input window is safer than a short duplicate-input
+            # window, and every teardown step remains best-effort/idempotent.
             if token is not None and virtual_provider is not None:
                 try:
                     virtual_provider.close(token=token, generation=generation)
                 except Exception as exc:
                     failures.append(f"virtual: {exc}")
+            if token is not None and physical_output_sink is not None:
+                try:
+                    physical_output_sink.end(token=token, generation=generation)
+                except Exception as exc:
+                    failures.append(f"physical_output: {exc}")
+            if token is not None and suppression_provider is not None:
+                try:
+                    suppression_provider.disable(token=token, generation=generation)
+                except Exception as exc:
+                    failures.append(f"suppression: {exc}")
             self._token = None
             now = self.clock()
             self._status = replace(
@@ -318,13 +358,23 @@ class ExclusiveCoordinator:
             if not self._status.enabled or self._token is None or self.output_source is None:
                 return self._status
             try:
-                self.output_source.submit_state(
+                output_reports = self.output_source.submit_state(
                     reading.input,
                     battery=reading.battery,
                     sequence=self._mirrored_sequence + 1,
                     token=self._token,
                     generation=self._generation,
                 )
+                if output_reports:
+                    physical_output_sink = self.physical_output_sink
+                    if physical_output_sink is None:
+                        raise RuntimeError("Exclusive physical output sink disappeared while active")
+                    for report in output_reports:
+                        physical_output_sink.submit(
+                            bytes(report),
+                            token=self._token,
+                            generation=self._generation,
+                        )
                 self._mirrored_sequence += 1
                 # A successful mirror is the liveness proof for the core lease;
                 # the provider heartbeat is throttled separately in tick().
@@ -442,6 +492,7 @@ class FakeExclusiveVirtualProvider:
         self.fail_start = fail_start
         self.started = False
         self.states: list[dict[str, Any]] = []
+        self.output_reports: list[bytes] = []
         self._capability = type(
             "Capability",
             (),
@@ -476,10 +527,16 @@ class FakeExclusiveVirtualProvider:
 
     def submit_state(
         self, input_state: ControllerInput, *, battery: Any, sequence: int, token: str, generation: int
-    ) -> None:
+    ) -> tuple[bytes, ...]:
         if not self.started:
             raise RuntimeError("fake virtual provider is not started")
         self.states.append({"input": input_state.to_dict(), "battery": battery.to_dict(), "sequence": sequence})
+        reports = tuple(self.output_reports)
+        self.output_reports.clear()
+        return reports
+
+    def queue_output_report(self, report: bytes) -> None:
+        self.output_reports.append(bytes(report))
 
     def close(self, *, token: str, generation: int) -> None:
         self.started = False
@@ -488,6 +545,46 @@ class FakeExclusiveVirtualProvider:
         recovered = self.started or bool(self.states)
         self.started = False
         return recovered
+
+
+class FakePhysicalOutputReportSink:
+    def __init__(self, *, verified: bool = True, fail_begin: bool = False, events: list[str] | None = None) -> None:
+        self.active = False
+        self.fail_begin = fail_begin
+        self.reports: list[bytes] = []
+        self.events = events
+        self._capability = type(
+            "PhysicalOutputCapability",
+            (),
+            {
+                "available": True,
+                "verified": verified,
+                "reason": None if verified else "fake physical output passthrough is intentionally unverified",
+            },
+        )()
+
+    def capability(self) -> Any:
+        return self._capability
+
+    def begin(self, *, token: str, generation: int) -> None:
+        del token, generation
+        if self.fail_begin:
+            raise RuntimeError("fake physical output passthrough start failure")
+        self.active = True
+        if self.events is not None:
+            self.events.append("physical_output.begin")
+
+    def submit(self, report: bytes, *, token: str, generation: int) -> None:
+        del token, generation
+        if not self.active:
+            raise RuntimeError("fake physical output passthrough is not active")
+        self.reports.append(bytes(report))
+
+    def end(self, *, token: str, generation: int) -> None:
+        del token, generation
+        self.active = False
+        if self.events is not None:
+            self.events.append("physical_output.end")
 
 
 class FakePhysicalSuppressionProvider:

@@ -1,4 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
+import glob
 import os
 import sysconfig
 from PyInstaller.utils.hooks import collect_all, collect_submodules
@@ -28,6 +29,12 @@ for pkg in ("customtkinter", "fastapi", "uvicorn", "websockets"):
     datas += d
     binaries += b
     hiddenimports += h
+
+# DS5Forge uses only ProcTap's native ProcessLoopback extension. Bundling the
+# whole package would pull NumPy/SciPy and unrelated Linux/macOS helpers into
+# the one-file core, substantially increasing startup time.
+for native in glob.glob(os.path.join(SITE, "proctap", "_native*.pyd")):
+    binaries.append((native, "proctap"))
 
 hiddenimports += collect_submodules("pyaudiowpatch")
 

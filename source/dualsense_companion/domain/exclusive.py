@@ -54,6 +54,7 @@ class ExclusiveCapability:
     provider_available: bool = False
     provider_installed: bool = False
     virtual_output_reports: bool = False
+    physical_output_passthrough: bool = False
     physical_suppression_available: bool = False
     physical_suppression_verified: bool = False
     provenance: ProviderProvenance = ProviderProvenance()
@@ -65,6 +66,7 @@ class ExclusiveCapability:
             self.provider_available
             and self.provider_installed
             and self.virtual_output_reports
+            and self.physical_output_passthrough
             and self.physical_suppression_available
             and self.physical_suppression_verified
             and self.provenance.verified

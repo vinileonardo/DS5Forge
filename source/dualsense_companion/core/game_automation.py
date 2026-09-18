@@ -221,9 +221,9 @@ def conflict_diagnostics(
             message = f"Could not inspect whether {process} is running."
             item_evidence = evidence
         elif is_running and lower == "steam.exe":
-            severity = "warning"
-            message = "Steam is running. Steam Input may affect this game depending on its configuration."
-            item_evidence = "Process name was observed; Steam Input activity was not proven."
+            severity = "info"
+            message = "Steam is running, but Steam Input state is unknown and may already be disabled for this game."
+            item_evidence = "Steam process was observed; active Steam Input interception was not proven."
         elif is_running:
             severity = "warning"
             message = f"{process} is running and may remap or virtualize controller input."

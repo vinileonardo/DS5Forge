@@ -74,10 +74,11 @@ subset chords in overlapping scopes are rejected.
 
 ### Conflict diagnostics
 
-Show process-name evidence for Steam and configured remappers. The Steam copy
-must say: “Steam is running. Steam Input may affect this game depending on its
-configuration.” Do not label Steam Input as active without evidence. Do not
-offer kill, disable or external configuration actions.
+Show process-name evidence for Steam and configured remappers. Steam process
+presence alone is informational: the copy must state that Steam Input state is
+unknown and may already be disabled for the current game. Do not label Steam
+Input as active or treat it as the likely cause without evidence. Do not offer
+kill, disable or external configuration actions.
 
 ## State matrix
 

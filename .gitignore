@@ -10,4 +10,10 @@ build/
 dist/
 source/build_tmp/
 source/dist/
+exclusive-helper/bin/
+exclusive-helper/obj/
+exclusive-helper/vendor/
+frontend/src-tauri/binaries/
+kcd_launcher.log
+uv.lock
 *.egg-info/

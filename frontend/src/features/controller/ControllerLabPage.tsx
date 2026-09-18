@@ -1,5 +1,5 @@
 import { Gamepad2, Lightbulb, RotateCcw, Save, TimerReset, Zap } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   Button,
@@ -18,6 +18,8 @@ import type {
   LightbarState,
   PlayerLedState,
   StickCalibration,
+  StickCalibrationEstimate,
+  StickTelemetry,
   TriggerEffect,
   TriggerPreview,
 } from "../../lib/api/contracts";
@@ -810,18 +812,48 @@ function SticksTab({
   input: ControllerInput;
   canControl: boolean;
 }) {
-  const { updateStickCalibration } = useRuntime();
+  const { updateStickCalibration, estimateStickCalibration } = useRuntime();
   const { t } = useI18n();
   const current = runtime?.stick_calibration ?? EMPTY_CALIBRATION;
   const [draft, setDraft] = useState(current);
   const [dirty, setDirty] = useState(false);
   const [pending, setPending] = useState(false);
+  const [measuring, setMeasuring] = useState(false);
+  const [sampleCount, setSampleCount] = useState(0);
+  const [analysis, setAnalysis] = useState<StickCalibrationEstimate | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const latestSticksRef = useRef<StickTelemetry>(input.sticks);
+  const samplesRef = useRef<StickTelemetry[]>([]);
+  const sampleIntervalRef = useRef<number | null>(null);
+  const finishTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    latestSticksRef.current = input.sticks;
+  }, [input.sticks]);
 
   useEffect(() => {
     if (!dirty) setDraft(current);
   }, [current, dirty]);
+
+  useEffect(
+    () => () => {
+      if (sampleIntervalRef.current !== null) window.clearInterval(sampleIntervalRef.current);
+      if (finishTimerRef.current !== null) window.clearTimeout(finishTimerRef.current);
+    },
+    [],
+  );
+
+  function stopMeasurementTimers() {
+    if (sampleIntervalRef.current !== null) {
+      window.clearInterval(sampleIntervalRef.current);
+      sampleIntervalRef.current = null;
+    }
+    if (finishTimerRef.current !== null) {
+      window.clearTimeout(finishTimerRef.current);
+      finishTimerRef.current = null;
+    }
+  }
 
   function update(key: keyof StickCalibration, value: string) {
     setDirty(true);
@@ -836,7 +868,7 @@ function SticksTab({
       const result = await updateStickCalibration(draft);
       setDraft(result);
       setDirty(false);
-      setMessage("Stick visualization metadata saved.");
+      setMessage(t("controller.calibrationSaved"));
     } catch (reason) {
       setError(reason);
     } finally {
@@ -844,9 +876,63 @@ function SticksTab({
     }
   }
 
+  async function finishMeasurement() {
+    stopMeasurementTimers();
+    setMeasuring(false);
+    const samples = [...samplesRef.current];
+    if (samples.length < 12) {
+      setError(new Error(t("controller.driftNotEnoughSamples")));
+      return;
+    }
+    setPending(true);
+    setError(null);
+    try {
+      setAnalysis(await estimateStickCalibration(samples));
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  function startMeasurement() {
+    if (!canControl || pending) return;
+    stopMeasurementTimers();
+    setError(null);
+    setMessage(null);
+    setAnalysis(null);
+    samplesRef.current = [{ ...latestSticksRef.current }];
+    setSampleCount(1);
+    setMeasuring(true);
+    sampleIntervalRef.current = window.setInterval(() => {
+      if (samplesRef.current.length >= 512) return;
+      samplesRef.current.push({ ...latestSticksRef.current });
+      setSampleCount(samplesRef.current.length);
+    }, 50);
+    finishTimerRef.current = window.setTimeout(() => void finishMeasurement(), 3_000);
+  }
+
+  async function applyRecommendation() {
+    if (!analysis) return;
+    setPending(true);
+    setError(null);
+    try {
+      const result = await updateStickCalibration(analysis.recommended_calibration);
+      setDraft(result);
+      setDirty(false);
+      setMessage(t("controller.driftApplied"));
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
+
   return (
     <div className="stack" id="controller-lab-sticks" role="tabpanel">
-      <Notice tone="info" title="Calibration scope">
+      <Notice tone="info" title={t("controller.calibrationScope")}>
         {t("controller.calibrationHint")}
       </Notice>
       <ErrorText error={error} />
@@ -858,8 +944,63 @@ function SticksTab({
       <Card>
         <div className="card-header">
           <div>
-            <h2>Live stick planes</h2>
-            <p>The outlined circle shows the configured deadzone; the dot is the latest validated sample.</p>
+            <h2>{t("controller.driftTestTitle")}</h2>
+            <p>{t("controller.driftTestHelp")}</p>
+          </div>
+          <TimerReset size={18} color="var(--violet)" />
+        </div>
+        <div className="drift-test-panel">
+          <div>
+            <strong>{measuring ? t("controller.driftMeasuring") : t("controller.driftReady")}</strong>
+            <p className="muted">
+              {measuring
+                ? `${t("controller.driftHandsOff")} · ${sampleCount} ${t("controller.driftSamples")}`
+                : t("controller.driftInstruction")}
+            </p>
+          </div>
+          <Button onClick={startMeasurement} disabled={!canControl || pending || measuring}>
+            <TimerReset size={15} /> {measuring ? t("controller.driftMeasuring") : t("controller.driftStart")}
+          </Button>
+        </div>
+        {analysis && (
+          <>
+            <div className="drift-result-grid">
+              {(
+                [
+                  [t("controller.leftStick"), analysis.left],
+                  [t("controller.rightStick"), analysis.right],
+                ] as const
+              ).map(([label, result]) => (
+                <div className="drift-result" key={label}>
+                  <strong>{label}</strong>
+                  <span>
+                    {t("controller.driftCenter")}: <b>{percent(result.drift_radius)}</b>
+                  </span>
+                  <span>
+                    {t("controller.driftJitter")}: <b>{percent(result.jitter_radius)}</b>
+                  </span>
+                  <span>
+                    {t("controller.driftRecommended")}: <b>{percent(result.recommended_deadzone)}</b>
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="form-actions">
+              <span className="muted">
+                {analysis.samples} {t("controller.driftSamples")} · {t("controller.driftCenterCorrection")}
+              </span>
+              <Button onClick={() => void applyRecommendation()} disabled={!canControl || pending}>
+                <Save size={15} /> {pending ? t("controller.saving") : t("controller.driftApply")}
+              </Button>
+            </div>
+          </>
+        )}
+      </Card>
+      <Card>
+        <div className="card-header">
+          <div>
+            <h2>{t("controller.liveStickPlanes")}</h2>
+            <p>{t("controller.liveStickPlanesHelp")}</p>
           </div>
         </div>
         <StickPairVisualizer sticks={input.sticks} calibration={draft} />
@@ -867,13 +1008,16 @@ function SticksTab({
       <Card>
         <div className="card-header">
           <div>
-            <h2>Calibration metadata</h2>
-            <p>Values are bounded and persisted atomically with full profiles.</p>
+            <h2>{t("controller.manualCalibration")}</h2>
+            <p>{t("controller.manualCalibrationHelp")}</p>
           </div>
           <Gamepad2 size={18} color="var(--violet)" />
         </div>
         <div className="card-grid grid-2">
-          <Field label={`Left deadzone · ${draft.left_deadzone.toFixed(2)}`} help="0–1 normalized radius.">
+          <Field
+            label={`${t("controller.leftDeadzone")} · ${percent(draft.left_deadzone)}`}
+            help={t("controller.deadzoneHelp")}
+          >
             <input
               className="range-input"
               type="range"
@@ -881,11 +1025,14 @@ function SticksTab({
               max={1}
               step={0.01}
               value={draft.left_deadzone}
-              disabled={!canControl || pending}
+              disabled={!canControl || pending || measuring}
               onChange={(event) => update("left_deadzone", event.target.value)}
             />
           </Field>
-          <Field label={`Right deadzone · ${draft.right_deadzone.toFixed(2)}`} help="0–1 normalized radius.">
+          <Field
+            label={`${t("controller.rightDeadzone")} · ${percent(draft.right_deadzone)}`}
+            help={t("controller.deadzoneHelp")}
+          >
             <input
               className="range-input"
               type="range"
@@ -893,16 +1040,16 @@ function SticksTab({
               max={1}
               step={0.01}
               value={draft.right_deadzone}
-              disabled={!canControl || pending}
+              disabled={!canControl || pending || measuring}
               onChange={(event) => update("right_deadzone", event.target.value)}
             />
           </Field>
           {(
             [
-              ["left_center_x", "Left center X"],
-              ["left_center_y", "Left center Y"],
-              ["right_center_x", "Right center X"],
-              ["right_center_y", "Right center Y"],
+              ["left_center_x", t("controller.leftCenterX")],
+              ["left_center_y", t("controller.leftCenterY")],
+              ["right_center_x", t("controller.rightCenterX")],
+              ["right_center_y", t("controller.rightCenterY")],
             ] as const
           ).map(([key, label]) => (
             <Field key={key} label={label}>
@@ -911,7 +1058,7 @@ function SticksTab({
                 min={-1}
                 max={1}
                 step={0.01}
-                disabled={!canControl || pending}
+                disabled={!canControl || pending || measuring}
                 onChange={(event) => update(key, event.target.value)}
               />
             </Field>
@@ -919,10 +1066,10 @@ function SticksTab({
         </div>
         <div className="form-actions">
           <span className="muted">
-            {dirty ? "Unsaved calibration metadata" : "Calibration metadata is up to date."}
+            {dirty ? t("controller.calibrationUnsaved") : t("controller.calibrationUpToDate")}
           </span>
-          <Button onClick={() => void save()} disabled={!canControl || !dirty || pending}>
-            <Save size={15} /> {pending ? "Saving…" : "Save metadata"}
+          <Button onClick={() => void save()} disabled={!canControl || !dirty || pending || measuring}>
+            <Save size={15} /> {pending ? t("controller.saving") : t("controller.saveCalibration")}
           </Button>
         </div>
       </Card>

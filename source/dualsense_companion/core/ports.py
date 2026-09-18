@@ -113,6 +113,23 @@ class ExclusiveVirtualCapability(Protocol):
     reason: str | None
 
 
+class PhysicalOutputReportSink(Protocol):
+    """Physical DualSense output path used while Exclusive owns the device.
+
+    Entering passthrough must stop DS5Forge-generated output reports from
+    racing the game's virtual-controller feedback. Implementations restore
+    their normal output loop when the Exclusive session ends.
+    """
+
+    def capability(self) -> object: ...
+
+    def begin(self, *, token: str, generation: int) -> None: ...
+
+    def submit(self, report: bytes, *, token: str, generation: int) -> None: ...
+
+    def end(self, *, token: str, generation: int) -> None: ...
+
+
 class PhysicalInputSuppressionProvider(Protocol):
     """Session-scoped physical input suppression (HidHide adapter boundary)."""
 
@@ -158,7 +175,7 @@ class VirtualOutputReportSource(Protocol):
         sequence: int,
         token: str,
         generation: int,
-    ) -> None: ...
+    ) -> tuple[bytes, ...] | None: ...
 
     def close(self, *, token: str, generation: int) -> None: ...
 

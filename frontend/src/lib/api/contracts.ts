@@ -220,6 +220,27 @@ export const StickCalibrationSchema = z
   })
   .strict();
 
+export const StickDriftAnalysisSchema = z
+  .object({
+    center_x: bounded(-1, 1),
+    center_y: bounded(-1, 1),
+    drift_radius: bounded(0, 2),
+    jitter_radius: bounded(0, 2),
+    recommended_deadzone: bounded(0, 1),
+    samples_used: z.number().int().min(0).max(512),
+    rejected_samples: z.number().int().min(0).max(512),
+  })
+  .strict();
+
+export const StickCalibrationEstimateSchema = z
+  .object({
+    samples: z.number().int().min(0).max(512),
+    left: StickDriftAnalysisSchema,
+    right: StickDriftAnalysisSchema,
+    recommended_calibration: StickCalibrationSchema,
+  })
+  .strict();
+
 export const GestureConfigSchema = z
   .object({
     enabled: z.boolean(),
@@ -265,6 +286,7 @@ export const GameDefinitionSchema = z
     profile: z.string().min(1),
     compatibility_mode: z.enum(["native", "remap", "virtual"]),
     adaptive_trigger_mode: z.enum(["native", "reactive", "off"]).default("native"),
+    adaptive_trigger_strength: z.number().int().min(10).max(100).default(45),
     enabled: z.boolean(),
   })
   .strict();
@@ -376,6 +398,7 @@ export const ExclusiveCapabilitySchema = z
     provider_available: z.boolean(),
     provider_installed: z.boolean(),
     virtual_output_reports: z.boolean(),
+    physical_output_passthrough: z.boolean(),
     physical_suppression_available: z.boolean(),
     physical_suppression_verified: z.boolean(),
     provenance: ProviderProvenanceSchema,
@@ -849,6 +872,8 @@ export type TriggerState = z.infer<typeof TriggerStateSchema>;
 export type TriggerPreview = z.infer<typeof TriggerPreviewSchema>;
 export type HapticsTestRun = z.infer<typeof HapticsTestRunSchema>;
 export type StickCalibration = z.infer<typeof StickCalibrationSchema>;
+export type StickDriftAnalysis = z.infer<typeof StickDriftAnalysisSchema>;
+export type StickCalibrationEstimate = z.infer<typeof StickCalibrationEstimateSchema>;
 export type GestureConfig = z.infer<typeof GestureConfigSchema>;
 export type ControllerProfile = z.input<typeof FullControllerProfileSchema>;
 export type ProfileLoadResponse = z.infer<typeof ProfileLoadResponseSchema>;

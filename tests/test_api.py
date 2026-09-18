@@ -192,8 +192,9 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
             diagnostic = await client.get("/api/v1/diagnostics/duplicate-input")
             self.assertEqual(diagnostic.status_code, 200)
-            self.assertTrue(diagnostic.json()["risk"])
+            self.assertFalse(diagnostic.json()["risk"])
             self.assertTrue(diagnostic.json()["physical_visible"])
+            self.assertFalse(diagnostic.json()["virtual_active"])
 
             candidates = await client.get("/api/v1/games/candidates")
             self.assertEqual(candidates.status_code, 200)
@@ -363,6 +364,22 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 },
             )
             self.assertEqual(coerced_calibration.status_code, 422)
+
+            drift_estimate = await client.post(
+                "/api/v1/controller/sticks/calibration/estimate",
+                json={
+                    "samples": [
+                        {"left_x": 0.04, "left_y": -0.03, "right_x": -0.02, "right_y": 0.01}
+                        for _ in range(60)
+                    ]
+                },
+            )
+            self.assertEqual(drift_estimate.status_code, 200)
+            estimate = drift_estimate.json()
+            self.assertEqual(estimate["samples"], 60)
+            self.assertAlmostEqual(estimate["left"]["drift_radius"], 0.05)
+            self.assertEqual(estimate["left"]["recommended_deadzone"], 0.02)
+            self.assertAlmostEqual(estimate["recommended_calibration"]["left_center_x"], 0.04)
 
     async def test_full_profile_export_import_and_rejected_import(self):
         import httpx
