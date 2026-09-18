@@ -57,6 +57,7 @@ function exclusiveCapability(overrides: Record<string, unknown> = {}) {
     provider_available: true,
     provider_installed: true,
     virtual_output_reports: true,
+    physical_output_passthrough: true,
     physical_suppression_available: true,
     physical_suppression_verified: true,
     provenance: {
@@ -271,7 +272,7 @@ describe("GamesPage", () => {
     expect(await screen.findByText("Matched: Executable name and configured path matched.")).toBeVisible();
   });
 
-  it("keeps mapping/chord ids immutable, removes them through full-list updates and warns on running conflicts", async () => {
+  it("keeps mapping/chord ids immutable, removes them through full-list updates and reports Steam as informational without proof", async () => {
     setupApi();
     apiMock.mappings.mockResolvedValue({
       mappings: [
@@ -305,9 +306,10 @@ describe("GamesPage", () => {
         {
           process: "steam.exe",
           running: true,
-          severity: "warning",
-          message: "Steam is running. Steam Input may affect this game depending on its configuration.",
-          evidence: "Process name was observed; Steam Input activity was not proven.",
+          severity: "info",
+          message:
+            "Steam is running, but Steam Input state is unknown and may already be disabled for this game.",
+          evidence: "Steam process was observed; active Steam Input interception was not proven.",
           checked_at: 100,
         },
       ],
@@ -345,7 +347,7 @@ describe("GamesPage", () => {
     fireEvent.click(within(chordsCard).getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(apiMock.updateChords).toHaveBeenCalledWith([]));
 
-    expect(screen.getByText("warning", { exact: true })).toHaveClass("status-warning");
+    expect(screen.getByText("info", { exact: true })).toHaveClass("status-neutral");
     expect(screen.getByText("Possible double input in Remap", { exact: true })).toBeVisible();
   });
 

@@ -392,6 +392,11 @@ export class RealtimeSocket {
   }
 
   private handleMessage(raw: unknown): void {
+    // Once one frame has invalidated the protocol, ignore anything that races
+    // the WebSocket close handshake. Otherwise a later controller.input or
+    // state.updated frame can overwrite the original validation error with the
+    // misleading "first frame must be state.snapshot" message.
+    if (this.protocolFault) return;
     try {
       const value = typeof raw === "string" ? JSON.parse(raw) : raw;
       const parsed = parseSocketMessage(value);
@@ -413,10 +418,17 @@ export class RealtimeSocket {
       if (parsed.kind === "event") this.options.onEvent(parsed.event);
       else this.options.onUnknownEvent?.(parsed.type);
     } catch (error) {
-      const protocolError =
-        error instanceof ApiProtocolError
-          ? error
-          : new ApiProtocolError("The WebSocket payload is invalid.", error);
+      let protocolError: ApiProtocolError;
+      if (error instanceof ApiProtocolError) {
+        protocolError = error;
+      } else if (error instanceof z.ZodError) {
+        const issue = error.issues[0];
+        const path = issue?.path.length ? ` at ${issue.path.join(".")}` : "";
+        const detail = issue?.message ? `: ${issue.message}` : "";
+        protocolError = new ApiProtocolError(`The WebSocket payload is invalid${path}${detail}`, error);
+      } else {
+        protocolError = new ApiProtocolError("The WebSocket payload is invalid.", error);
+      }
       this.protocolFault = true;
       this.options.onProtocolError(protocolError);
       this.options.onStatus("protocol_error");

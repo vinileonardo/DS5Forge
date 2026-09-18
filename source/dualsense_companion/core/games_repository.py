@@ -208,6 +208,7 @@ def game_definitions(document: ABCMapping[str, Any]) -> tuple[GameDefinition, ..
             profile=item["profile"],
             compatibility_mode=CompatibilityMode(item["compatibility_mode"]),
             adaptive_trigger_mode=AdaptiveTriggerMode(item.get("adaptive_trigger_mode", "native")),
+            adaptive_trigger_strength=item.get("adaptive_trigger_strength", 45),
             enabled=item["enabled"],
         )
         for item in document["games"]
@@ -324,6 +325,7 @@ def _validate_games(value: Any) -> list[dict[str, Any]]:
         "profile",
         "compatibility_mode",
         "adaptive_trigger_mode",
+        "adaptive_trigger_strength",
         "enabled",
     }
     for index, raw in enumerate(value):
@@ -364,6 +366,12 @@ def _validate_games(value: Any) -> list[dict[str, Any]]:
             AdaptiveTriggerMode,
             prefix + ".adaptive_trigger_mode",
         )
+        trigger_strength = _bounded_int(
+            raw.get("adaptive_trigger_strength", 45),
+            f"{prefix}.adaptive_trigger_strength",
+            10,
+            100,
+        )
         enabled = _strict_bool(raw.get("enabled", True), f"{prefix}.enabled")
         result.append(
             {
@@ -374,6 +382,7 @@ def _validate_games(value: Any) -> list[dict[str, Any]]:
                 "profile": profile,
                 "compatibility_mode": mode,
                 "adaptive_trigger_mode": trigger_mode,
+                "adaptive_trigger_strength": trigger_strength,
                 "enabled": enabled,
             }
         )

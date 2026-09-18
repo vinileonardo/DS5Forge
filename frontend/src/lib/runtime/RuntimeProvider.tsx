@@ -23,6 +23,8 @@ import {
   type ProfileSummary,
   type RuntimeState,
   type StickCalibration,
+  type StickCalibrationEstimate,
+  type StickTelemetry,
   type TriggerEffect,
   type TriggerPreview,
   type TriggerState,
@@ -86,6 +88,7 @@ type RuntimeContextValue = RuntimeView & {
   }) => Promise<HapticsTestRun>;
   cancelHapticsTest: () => Promise<HapticsTestRun | null>;
   updateStickCalibration: (calibration: StickCalibration) => Promise<StickCalibration>;
+  estimateStickCalibration: (samples: StickTelemetry[]) => Promise<StickCalibrationEstimate>;
   updateGestures: (patch: Partial<GestureConfig>) => Promise<GestureConfig>;
   canControl: boolean;
 };
@@ -459,6 +462,11 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     [updateWith],
   );
 
+  const estimateStickCalibration = useCallback(
+    (samples: StickTelemetry[]) => updateWith(() => api.estimateStickCalibration(samples)),
+    [updateWith],
+  );
+
   const updateGestures = useCallback(
     (patch: Partial<GestureConfig>) =>
       updateWith(async () => {
@@ -535,6 +543,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
       startHapticsTest,
       cancelHapticsTest,
       updateStickCalibration,
+      estimateStickCalibration,
       updateGestures,
       canControl: view.coreStatus === "online" && !view.stale && view.runtime?.connection === "connected",
     }),
@@ -563,6 +572,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
       updateConfig,
       updateGestures,
       updateStickCalibration,
+      estimateStickCalibration,
       view,
     ],
   );

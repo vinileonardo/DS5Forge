@@ -37,6 +37,7 @@ const EMPTY_GAME: GameDefinition = {
   profile: "Default",
   compatibility_mode: "native",
   adaptive_trigger_mode: "native",
+  adaptive_trigger_strength: 45,
   enabled: true,
 };
 
@@ -63,7 +64,9 @@ const EMPTY_CHORD: Chord = {
 
 function conflictTone(item: ConflictDiagnostic): "success" | "warning" | "danger" | "neutral" {
   if (!item.running) return "neutral";
-  return item.severity === "danger" ? "danger" : "warning";
+  if (item.severity === "danger") return "danger";
+  if (item.severity === "warning") return "warning";
+  return "neutral";
 }
 
 function CompatibilityLabel({ state }: { state: CompatibilityState | undefined }) {
@@ -129,7 +132,9 @@ export function GamesPage() {
     for (const item of trustedRuntime?.conflicts ?? []) byProcess.set(item.process.toLowerCase(), item);
     return [...byProcess.values()];
   }, [conflicts, trustedRuntime?.conflicts]);
-  const hasKnownConflict = displayedConflicts.some((item) => item.running);
+  const hasKnownConflict = displayedConflicts.some(
+    (item) => item.running && (item.severity === "warning" || item.severity === "danger"),
+  );
   const statusLabel =
     coreStatus === "reconnecting"
       ? t("games.statusReconnecting")
@@ -517,6 +522,12 @@ export function GamesPage() {
               <dt>{t("games.outputReports")}</dt>
               <dd>
                 {(exclusiveCapability?.virtual_output_reports ?? false) ? t("games.yes") : t("games.no")}
+              </dd>
+            </div>
+            <div className="data-item">
+              <dt>{t("games.outputPassthrough")}</dt>
+              <dd>
+                {(exclusiveCapability?.physical_output_passthrough ?? false) ? t("games.yes") : t("games.no")}
               </dd>
             </div>
             <div className="data-item">
@@ -931,6 +942,26 @@ export function GamesPage() {
                 <option value="off">{t("games.adaptiveOff")}</option>
               </Select>
             </Field>
+            {gameDraft.adaptive_trigger_mode === "reactive" && (
+              <Field label={t("games.adaptiveTriggerStrength")} help={t("games.adaptiveTriggerStrengthHelp")}>
+                <input
+                  className="input"
+                  type="range"
+                  min={10}
+                  max={100}
+                  step={5}
+                  aria-label={t("games.adaptiveTriggerStrength")}
+                  value={gameDraft.adaptive_trigger_strength}
+                  onChange={(event) =>
+                    setGameDraft({
+                      ...gameDraft,
+                      adaptive_trigger_strength: Number(event.target.value),
+                    })
+                  }
+                />
+                <span className="muted">{gameDraft.adaptive_trigger_strength}%</span>
+              </Field>
+            )}
             <Toggle
               label={t("games.ruleEnabled")}
               description={t("games.ruleEnabledHelp")}
@@ -1307,6 +1338,7 @@ function exclusiveOperational(capability: ExclusiveCapability | null): boolean {
     capability.provider_available &&
     capability.provider_installed &&
     capability.virtual_output_reports &&
+    capability.physical_output_passthrough &&
     capability.physical_suppression_available &&
     capability.physical_suppression_verified &&
     capability.provenance.signature_verified &&
@@ -1377,7 +1409,7 @@ function localizedConflictMessage(item: ConflictDiagnostic, locale: Locale): str
   if (locale !== "pt-BR") return item.message;
   if (!item.running) return `${item.process} não foi detectado.`;
   if (item.process.toLowerCase() === "steam.exe") {
-    return "A Steam está em execução. O Steam Input pode afetar o controle dependendo da configuração do jogo.";
+    return "A Steam está em execução, mas o estado do Steam Input não foi confirmado e ele pode já estar desativado para este jogo.";
   }
   return `${item.process} está em execução e pode remapear ou virtualizar a entrada do controle.`;
 }

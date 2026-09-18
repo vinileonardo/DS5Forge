@@ -226,8 +226,16 @@ class WindowsHidMaestroProvider:
     def heartbeat(self, *, token: str, generation: int) -> None:
         self.client.request({"op": "heartbeat", "token": token, "generation": generation})
 
-    def submit_state(self, input_state: Any, *, battery: Any, sequence: int, token: str, generation: int) -> None:
-        self.client.request(
+    def submit_state(
+        self,
+        input_state: Any,
+        *,
+        battery: Any,
+        sequence: int,
+        token: str,
+        generation: int,
+    ) -> tuple[bytes, ...]:
+        result = self.client.request(
             {
                 "op": "submit_state",
                 "token": token,
@@ -237,6 +245,21 @@ class WindowsHidMaestroProvider:
                 "battery": battery.to_dict(),
             }
         )
+        raw_reports = result.get("output_reports", [])
+        if not isinstance(raw_reports, list) or len(raw_reports) > 32:
+            raise RuntimeError("Exclusive helper returned an invalid output-report batch")
+        reports: list[bytes] = []
+        for encoded in raw_reports:
+            if not isinstance(encoded, str):
+                raise RuntimeError("Exclusive helper returned a non-string output report")
+            try:
+                report = bytes.fromhex(encoded)
+            except ValueError as exc:
+                raise RuntimeError("Exclusive helper returned malformed output-report hex") from exc
+            if len(report) != 64 or report[0] != 0x02:
+                raise RuntimeError("Exclusive helper returned a non-USB-DualSense output report")
+            reports.append(report)
+        return tuple(reports)
 
     def close(self, *, token: str, generation: int) -> None:
         try:

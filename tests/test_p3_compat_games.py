@@ -247,8 +247,10 @@ class P3DomainTests(unittest.TestCase):
         )
         self.assertEqual(len(diagnostics), 2)
         self.assertEqual(
-            diagnostics[0].message, "Steam is running. Steam Input may affect this game depending on its configuration."
+            diagnostics[0].message,
+            "Steam is running, but Steam Input state is unknown and may already be disabled for this game.",
         )
+        self.assertEqual(diagnostics[0].severity, "info")
         self.assertIn("not proven", diagnostics[0].evidence)
         self.assertFalse(diagnostics[1].running)
 
@@ -665,6 +667,92 @@ class P3FacadeTests(unittest.TestCase):
                 inspector.applications = []
                 facade._on_foreground_observation(ForegroundApplication.desktop(now=5), False)
                 self.assertIsNone(facade.snapshot().automation.active_game_id)
+            finally:
+                facade.stop()
+
+    def test_game_automation_routes_reactive_audio_to_the_active_game_pid_only(self):
+        with tempfile.TemporaryDirectory() as temp:
+
+            class TargetCaptureFactory:
+                def __init__(self):
+                    self.events = []
+
+                def select_process(self, pid, *, app_name, executable_name=None):
+                    self.events.append(("select", pid, app_name, executable_name))
+                    return True
+
+                def clear_process(self):
+                    self.events.append(("clear",))
+                    return True
+
+            capture = TargetCaptureFactory()
+            a = foreground("a.exe", 10)
+            b = foreground("b.exe", 11, now=2)
+            inspector = FakeProcessInspector(applications=[a])
+            facade = make_facade(Path(temp), capture_factory=capture, process_inspector=inspector)
+            try:
+                facade.add_game(game("a", "a.exe"))
+                facade.add_game(game("b", "b.exe"))
+                facade.update_automation({"enabled": True})
+
+                facade._on_foreground_observation(a, True)
+                self.assertEqual(capture.events[-1], ("select", 10, "A", "a.exe"))
+
+                # Foreground loss must not reroute audio while A is still the
+                # process-owned active game.
+                facade._on_foreground_observation(ForegroundApplication.desktop(now=3), True)
+                self.assertEqual(capture.events.count(("select", 10, "A", "a.exe")), 1)
+
+                inspector.applications = [a, b]
+                facade._on_foreground_observation(b, True)
+                self.assertEqual(capture.events[-1], ("select", 11, "B", "b.exe"))
+
+                inspector.applications = []
+                facade._on_foreground_observation(ForegroundApplication.desktop(now=4), True)
+                self.assertEqual(capture.events[-1], ("clear",))
+            finally:
+                facade.stop()
+
+    def test_native_game_automation_yields_physical_dualsense_output_and_restores_it_on_exit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            facade = make_facade(Path(temp))
+            begin = Mock(return_value=True)
+            end = Mock(return_value=True)
+            facade.controller.begin_native_game_output_passthrough = begin
+            facade.controller.end_native_game_output_passthrough = end
+            try:
+                facade.add_game(game("native", "native.exe"))
+                facade.update_automation({"enabled": True})
+
+                facade._on_foreground_observation(foreground("native.exe", 10), True)
+                self.assertEqual(facade.snapshot().automation.active_game_id, "native")
+                begin.assert_called_once_with()
+                self.assertTrue(facade._native_game_output_passthrough_active)
+
+                facade._on_foreground_observation(ForegroundApplication.desktop(now=2), False)
+                self.assertIsNone(facade.snapshot().automation.active_game_id)
+                end.assert_called_once_with()
+                self.assertFalse(facade._native_game_output_passthrough_active)
+            finally:
+                facade.stop()
+
+    def test_native_reactive_game_keeps_ds5forge_output_ownership(self):
+        with tempfile.TemporaryDirectory() as temp:
+            facade = make_facade(Path(temp))
+            begin = Mock(return_value=True)
+            facade.controller.begin_native_game_output_passthrough = begin
+            try:
+                reactive_game = game("reactive", "reactive.exe")
+                reactive_game["adaptive_trigger_mode"] = "reactive"
+                facade.add_game(reactive_game)
+                facade.update_automation({"enabled": True})
+
+                facade._on_foreground_observation(foreground("reactive.exe", 11), True)
+
+                self.assertEqual(facade.snapshot().automation.active_game_id, "reactive")
+                self.assertEqual(facade._adaptive_trigger_mode, "reactive")
+                begin.assert_not_called()
+                self.assertFalse(facade._native_game_output_passthrough_active)
             finally:
                 facade.stop()
 

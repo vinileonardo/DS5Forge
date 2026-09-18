@@ -17,6 +17,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,14 @@ DS5FORGE_CORE_BASENAME = "ds5forge-core.exe"
 SONY_VENDOR_ID = "VID_054C"
 
 Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
+
+
+@dataclass(frozen=True, slots=True)
+class ExclusiveSuppressionCapability:
+    available: bool
+    verified: bool
+    session_scoped: bool
+    reason: str | None = None
 
 
 class WindowsHidHideIsolationProvider:
@@ -41,6 +50,7 @@ class WindowsHidHideIsolationProvider:
         runner: Runner | None = None,
         platform: str | None = None,
         clock: Callable[[], float] = time.time,
+        target_hid_path_getter: Callable[[], object | None] | None = None,
     ) -> None:
         self.cli_path = Path(cli_path)
         self.application_path = Path(application_path or sys.executable)
@@ -48,6 +58,7 @@ class WindowsHidHideIsolationProvider:
         self.runner = runner
         self.platform = platform or sys.platform
         self.clock = clock
+        self.target_hid_path_getter = target_hid_path_getter
         self._lock = threading.RLock()
 
     def capability(self) -> InputIsolationCapability:
@@ -95,11 +106,21 @@ class WindowsHidHideIsolationProvider:
                 reason=f"HidHide device discovery failed: {exc}",
             )
         wired = _wired_dualsense_devices(devices)
+        if len(wired) > 1 and self.target_hid_path_getter is not None:
+            selected = _normalize_hid_instance(self.target_hid_path_getter())
+            if selected:
+                matched = [
+                    device
+                    for device in wired
+                    if _normalize_hid_instance(device.get("deviceInstancePath")) == selected
+                ]
+                if len(matched) == 1:
+                    wired = matched
         if len(wired) != 1:
             reason = (
                 "No wired DualSense was found by HidHide."
                 if not wired
-                else "More than one wired DualSense is connected; automatic isolation is ambiguous."
+                else "More than one wired DualSense is connected and the active DS5Forge HID path could not be resolved."
             )
             return InputIsolationCapability(
                 installed=True,
@@ -318,6 +339,67 @@ class WindowsHidHideIsolationProvider:
             pass
 
 
+class WindowsHidHideExclusiveSuppressionProvider:
+    """Adapt the proven P5.1 HidHide isolation provider to Exclusive ownership.
+
+    Exclusive and Remap intentionally share one HidHide authority. This keeps
+    active-controller selection, application allowlisting, rollback markers and
+    stale recovery in one place instead of letting a privileged virtual-device
+    broker mutate HidHide independently.
+    """
+
+    def __init__(self, isolation: WindowsHidHideIsolationProvider) -> None:
+        self.isolation = isolation
+        self._owner: tuple[str, int] | None = None
+        self._lock = threading.RLock()
+
+    def capability(self) -> ExclusiveSuppressionCapability:
+        capability = self.isolation.capability()
+        operational = capability.operational
+        return ExclusiveSuppressionCapability(
+            available=operational,
+            verified=operational,
+            session_scoped=operational,
+            reason=None if operational else capability.reason,
+        )
+
+    def enable(self, *, token: str, generation: int) -> None:
+        owner = (token, generation)
+        with self._lock:
+            if self._owner is not None and self._owner != owner:
+                raise RuntimeError("HidHide suppression is already owned by another Exclusive session")
+            status = self.isolation.enable()
+            if not status.active or status.physical_input_visible:
+                raise RuntimeError(status.last_error or status.reason or "HidHide suppression could not be verified")
+            self._owner = owner
+
+    def heartbeat(self, *, token: str, generation: int) -> None:
+        owner = (token, generation)
+        with self._lock:
+            if self._owner != owner:
+                raise RuntimeError("Exclusive HidHide suppression ownership was lost")
+            status = self.isolation.status()
+            if not status.active or status.physical_input_visible:
+                raise RuntimeError(status.last_error or status.reason or "Exclusive HidHide suppression is no longer active")
+
+    def disable(self, *, token: str, generation: int) -> None:
+        owner = (token, generation)
+        with self._lock:
+            if self._owner is not None and self._owner != owner:
+                raise RuntimeError("Exclusive HidHide suppression ownership does not match")
+            try:
+                status = self.isolation.disable()
+                if status.active or not status.physical_input_visible:
+                    raise RuntimeError(status.last_error or status.reason or "HidHide suppression teardown could not be verified")
+            finally:
+                self._owner = None
+
+    def recover_stale(self) -> None:
+        with self._lock:
+            self.isolation.recover_stale()
+            self._owner = None
+
+
 def _run_external_windows_command(command: list[str], *, timeout: float) -> subprocess.CompletedProcess[str]:
     """Launch a system executable without leaking PyInstaller's DLL directory.
 
@@ -390,6 +472,26 @@ def _wired_dualsense_devices(devices: list[dict[str, Any]]) -> list[dict[str, An
             continue
         result.append(device)
     return result
+
+
+def _normalize_hid_instance(value: object | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        text = value.decode("utf-8", errors="replace")
+    else:
+        text = str(value)
+    upper = text.upper().strip()
+    marker = upper.find("HID#")
+    if marker >= 0:
+        upper = upper[marker:]
+        upper = upper.split("#{", 1)[0]
+        upper = upper.replace("#", "\\")
+    else:
+        marker = upper.find("HID\\")
+        if marker >= 0:
+            upper = upper[marker:]
+    return upper.rstrip("\\")
 
 
 def _quoted_value(line: str, command: str) -> str | None:

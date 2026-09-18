@@ -3,7 +3,10 @@ import types
 import unittest
 from unittest.mock import patch
 
-from dualsense_companion.platform.windows.audio_capture import WasapiLoopbackCapture
+from dualsense_companion.platform.windows.audio_capture import (
+    WasapiLoopbackCapture,
+    WasapiProcessLoopbackFactory,
+)
 
 
 class FakeStream:
@@ -76,6 +79,76 @@ class AudioCaptureTests(unittest.TestCase):
 
         self.assertIsNone(capture._pyaudio)
         self.assertIsNone(capture._wasapi_type)
+
+    def test_process_loopback_targets_one_pid_and_invalidates_on_game_change(self):
+        class FakeProcessLoopback:
+            instances = []
+
+            def __init__(self, pid):
+                self.pid = pid
+                self.started = False
+                self.stopped = False
+                self.read_calls = 0
+                self.__class__.instances.append(self)
+
+            def start(self):
+                self.started = True
+
+            def get_format(self):
+                return {
+                    "sample_rate": 48_000,
+                    "channels": 2,
+                    "bits_per_sample": 32,
+                    "block_align": 8,
+                }
+
+            def read(self):
+                self.read_calls += 1
+                return b"\x00" * 32
+
+            def stop(self):
+                self.stopped = True
+
+        factory = WasapiProcessLoopbackFactory()
+        self.assertFalse(factory.is_ready())
+        self.assertTrue(
+            factory.select_process(
+                101,
+                app_name="Black Myth: Wukong",
+                executable_name="b1-Win64-Shipping.exe",
+            )
+        )
+        self.assertTrue(factory.is_ready())
+
+        with patch(
+            "dualsense_companion.platform.windows.audio_capture._load_process_loopback_class",
+            return_value=FakeProcessLoopback,
+        ):
+            capture = factory.open()
+            with capture:
+                self.assertEqual(capture.sample_rate, 48_000)
+                self.assertEqual(capture.channels, 2)
+                self.assertIn("Black Myth: Wukong", capture.name)
+                self.assertIn("PID 101", capture.name)
+                self.assertEqual(capture.read(), b"\x00" * 32)
+                self.assertFalse(capture.default_output_changed())
+
+                self.assertTrue(
+                    factory.select_process(
+                        202,
+                        app_name="Kingdom Come: Deliverance II",
+                        executable_name="KingdomCome.exe",
+                    )
+                )
+                self.assertTrue(capture.default_output_changed())
+
+        instance = FakeProcessLoopback.instances[0]
+        self.assertTrue(instance.started)
+        self.assertEqual(instance.pid, 101)
+        self.assertEqual(instance.read_calls, 1)
+        self.assertTrue(instance.stopped)
+        self.assertTrue(factory.clear_process())
+        self.assertFalse(factory.is_ready())
 
 
 if __name__ == "__main__":

@@ -12,19 +12,23 @@ from dualsense_companion.core.facade import CoreFacade
 from dualsense_companion.core.games_repository import GameRegistryRepository
 from dualsense_companion.core.input_isolation import InputIsolationCoordinator
 from dualsense_companion.domain.errors import DS5ForgeError, ErrorCode
-from dualsense_companion.platform.windows.hidhide import WindowsHidHideIsolationProvider
+from dualsense_companion.platform.windows.hidhide import (
+    WindowsHidHideExclusiveSuppressionProvider,
+    WindowsHidHideIsolationProvider,
+)
 
 DEVICE = r"HID\VID_054C&PID_0CE6&MI_03\8&1121ad8a&0&0000"
 BASE = r"USB\VID_054C&PID_0CE6\6&28CF390B&0&5"
 
 
 class FakeHidHideRunner:
-    def __init__(self, *, fail_once: str | None = None) -> None:
+    def __init__(self, *, fail_once: str | None = None, extra_devices: list[dict] | None = None) -> None:
         self.cloak = False
         self.apps: set[str] = set()
         self.hidden: set[str] = set()
         self.calls: list[tuple[str, ...]] = []
         self.fail_once = fail_once
+        self.extra_devices = list(extra_devices or [])
 
     def __call__(self, command: list[str]) -> subprocess.CompletedProcess[str]:
         args = tuple(command[1:])
@@ -55,7 +59,8 @@ class FakeHidHideRunner:
                                     "product": "DualSense Wireless Controller",
                                     "deviceInstancePath": DEVICE,
                                     "baseContainerDeviceInstancePath": BASE,
-                                }
+                                },
+                                *self.extra_devices,
                             ],
                         }
                     ]
@@ -124,7 +129,12 @@ class FakeMouse:
         return None
 
 
-def make_provider(root: Path, runner: FakeHidHideRunner) -> WindowsHidHideIsolationProvider:
+def make_provider(
+    root: Path,
+    runner: FakeHidHideRunner,
+    *,
+    target_hid_path_getter=None,
+) -> WindowsHidHideIsolationProvider:
     cli = root / "HidHideCLI.exe"
     app = root / "ds5forge-core.exe"
     cli.write_bytes(b"fixture")
@@ -135,6 +145,7 @@ def make_provider(root: Path, runner: FakeHidHideRunner) -> WindowsHidHideIsolat
         state_path=root / "hidhide-isolation.json",
         runner=runner,
         platform="win32",
+        target_hid_path_getter=target_hid_path_getter,
     )
 
 
@@ -173,6 +184,52 @@ def test_hidhide_provider_serializes_concurrent_cli_sessions():
         assert all(not thread.is_alive() for thread in threads)
         assert len(results) == 2
         assert runner.max_active == 1
+
+
+def test_hidhide_resolves_active_controller_path_when_multiple_dualsense_are_present():
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        other_device = {
+            "present": True,
+            "gamingDevice": True,
+            "product": "DualSense Wireless Controller",
+            "deviceInstancePath": r"HID\VID_054C&PID_0CE6&MI_03\4&2bf44b11&0&0000",
+            "baseContainerDeviceInstancePath": r"USB\VID_054C&PID_0CE6\2&1420F598&0&1",
+        }
+        runner = FakeHidHideRunner(extra_devices=[other_device])
+        hid_path = br"\\?\HID#VID_054C&PID_0CE6&MI_03#8&1121ad8a&0&0000#{4D1E55B2-F16F-11CF-88CB-001111000030}"
+        provider = make_provider(root, runner, target_hid_path_getter=lambda: hid_path)
+
+        capability = provider.capability()
+
+        assert capability.operational is True
+        assert capability.device_detected is True
+        assert capability.device_instance_path == DEVICE
+
+
+def test_exclusive_suppression_reuses_selected_hidhide_authority_and_enforces_ownership():
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        runner = FakeHidHideRunner()
+        isolation = make_provider(root, runner)
+        provider = WindowsHidHideExclusiveSuppressionProvider(isolation)
+
+        capability = provider.capability()
+        assert capability.available is True
+        assert capability.verified is True
+        assert capability.session_scoped is True
+
+        provider.enable(token="owner-a", generation=7)
+        assert isolation.status().active is True
+        provider.heartbeat(token="owner-a", generation=7)
+        with pytest.raises(RuntimeError, match="ownership"):
+            provider.heartbeat(token="owner-b", generation=7)
+        provider.disable(token="owner-a", generation=7)
+
+        assert isolation.status().active is False
+        assert runner.cloak is False
+        assert runner.apps == set()
+        assert runner.hidden == set()
 
 
 def test_hidhide_isolation_is_transactional_and_restores_only_owned_state():
@@ -258,8 +315,47 @@ def test_remap_input_isolation_updates_duplicate_input_state_and_releases_on_nat
             native = facade.update_compatibility("native")
             assert native["double_input_risk"] is False
             assert native["physical_input_visible"] is True
+            native_diagnostic = facade.duplicate_input_diagnostics()
+            assert native_diagnostic["risk"] is False
+            assert native_diagnostic["virtual_active"] is False
+            assert native_diagnostic["exclusive_enabled"] is False
+            assert "not creating a second controller input source" in native_diagnostic["message"]
             assert runner.cloak is False
             assert runner.apps == set()
             assert runner.hidden == set()
+        finally:
+            facade.stop()
+
+
+def test_native_mode_reports_unowned_hidhide_blocking_physical_input_without_removing_it():
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        runner = FakeHidHideRunner()
+        provider = make_provider(root, runner)
+        runner.cloak = True
+        runner.apps.add(str(provider.application_path))
+        runner.hidden.add(DEVICE)
+        facade = make_facade(root, InputIsolationCoordinator(provider))
+        try:
+            assert provider.status().active is True
+            assert provider.status().owned is False
+
+            native = facade.update_compatibility("native")
+            assert native["physical_input_visible"] is False
+            assert native["physical_suppression_active"] is True
+            assert native["double_input_risk"] is False
+            assert "external HidHide state" in (native["reason"] or "")
+
+            diagnostic = facade.duplicate_input_diagnostics()
+            assert diagnostic["risk"] is False
+            assert diagnostic["physical_visible"] is False
+            assert diagnostic["suppression_verified"] is True
+            assert diagnostic["severity"] == "warning"
+            assert "Games and joy.cpl may receive no controller input" in diagnostic["message"]
+
+            assert runner.cloak is True
+            assert str(provider.application_path) in runner.apps
+            assert DEVICE in runner.hidden
+            assert not provider.state_path.exists()
         finally:
             facade.stop()

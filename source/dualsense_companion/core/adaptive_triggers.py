@@ -262,21 +262,142 @@ class FakeTelemetryAdapter:
         return TriggerState(left=effect, right=effect)
 
 
+@dataclass(slots=True)
+class _ReactivePulse:
+    until: float = 0.0
+    energy: float = 0.0
+    frequency: int = 0
+
+
 class ReactiveTriggerAdapter:
-    """Generic, explicitly generated trigger effects from input/audio envelopes."""
+    """Generic generated effects that stay honest about the signals we own.
+
+    The adapter deliberately does not invent semantic game events. It turns
+    real trigger travel and the real audio envelope into a more varied tactile
+    vocabulary:
+
+    * each side reacts independently;
+    * normal travel uses a progressive feedback-zone resistance;
+    * a fresh trigger engagement produces a short kick;
+    * a sharp audio transient can add a brief pulse while that trigger is held.
+
+    Audio by itself never makes both triggers permanently stiff.
+    """
+
+    PRESS_THRESHOLD = 0.06
+    KICK_THRESHOLD = 0.16
+    AUDIO_TRANSIENT_THRESHOLD = 0.12
+    KICK_SECONDS = 0.075
+    AUDIO_PULSE_SECONDS = 0.060
+
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic) -> None:
+        self.clock = clock
+        self._previous_audio = 0.0
+        self._previous_press = {"left": 0.0, "right": 0.0}
+        self._pulse = {"left": _ReactivePulse(), "right": _ReactivePulse()}
+
+    def reset(self) -> None:
+        self._previous_audio = 0.0
+        self._previous_press = {"left": 0.0, "right": 0.0}
+        self._pulse = {"left": _ReactivePulse(), "right": _ReactivePulse()}
 
     def from_envelope(
         self,
         *,
         input_state: ControllerInput,
         audio_envelope: float = 0.0,
+        strength_percent: int = 45,
         now: float | None = None,
     ) -> TriggerState | None:
+        current = self.clock() if now is None else float(now)
         level = max(0.0, min(1.0, float(audio_envelope)))
-        engaged = max(input_state.l2, input_state.r2)
-        intensity = max(level, engaged)
-        if intensity <= 0.05:
+        strength = max(10, min(100, int(strength_percent))) / 100.0
+        audio_rise = max(0.0, level - self._previous_audio)
+
+        left = self._effect_for_side(
+            "left",
+            max(0.0, min(1.0, float(input_state.l2))),
+            level=level,
+            audio_rise=audio_rise,
+            strength=strength,
+            now=current,
+        )
+        right = self._effect_for_side(
+            "right",
+            max(0.0, min(1.0, float(input_state.r2))),
+            level=level,
+            audio_rise=audio_rise,
+            strength=strength,
+            now=current,
+        )
+
+        self._previous_audio = level
+        self._previous_press["left"] = max(0.0, min(1.0, float(input_state.l2)))
+        self._previous_press["right"] = max(0.0, min(1.0, float(input_state.r2)))
+
+        if left.is_off and right.is_off:
             return None
-        force = max(1, min(255, int(45 + 150 * intensity)))
-        effect = AdaptiveTriggerEffect(mode="resistance", force=force)
-        return TriggerState(left=effect, right=effect)
+        return TriggerState(left=left, right=right)
+
+    def _effect_for_side(
+        self,
+        side: str,
+        press: float,
+        *,
+        level: float,
+        audio_rise: float,
+        strength: float,
+        now: float,
+    ) -> AdaptiveTriggerEffect:
+        previous = self._previous_press[side]
+
+        if press <= self.PRESS_THRESHOLD:
+            self._pulse[side] = _ReactivePulse()
+            return AdaptiveTriggerEffect()
+
+        crossed_engagement = previous < self.KICK_THRESHOLD <= press
+        sharp_press = press - previous >= 0.22
+        sharp_audio = audio_rise >= self.AUDIO_TRANSIENT_THRESHOLD and press >= self.KICK_THRESHOLD
+
+        if crossed_engagement or sharp_press or sharp_audio:
+            press_energy = min(1.0, max(press, (press - previous) * 2.5))
+            audio_energy = min(1.0, audio_rise * 2.2)
+            energy = max(0.18, press_energy, audio_energy)
+            duration = self.KICK_SECONDS if crossed_engagement or sharp_press else self.AUDIO_PULSE_SECONDS
+            frequency = max(6, min(30, round(8 + 20 * max(level, audio_energy))))
+            self._pulse[side] = _ReactivePulse(
+                until=now + duration,
+                energy=energy,
+                frequency=frequency,
+            )
+
+        pulse = self._pulse[side]
+        if now < pulse.until:
+            pulse_force = max(1, min(255, round(255 * strength * (0.30 + 0.70 * pulse.energy))))
+            amplitude = max(1, min(255, round(255 * strength * (0.25 + 0.75 * pulse.energy))))
+            return AdaptiveTriggerEffect(
+                mode="pulse",
+                start_position=42,
+                end_position=205,
+                force=pulse_force,
+                frequency=pulse.frequency,
+                amplitude=amplitude,
+            )
+
+        # Progressive resistance is intentionally soft in the first part of
+        # travel. The pressure curve carries most of the weight; audio only
+        # modulates a trigger that the player is already using.
+        normalized = (press - self.PRESS_THRESHOLD) / (1.0 - self.PRESS_THRESHOLD)
+        pressure_curve = max(0.0, min(1.0, normalized)) ** 1.65
+        intensity = min(1.0, pressure_curve * (0.82 + 0.18 * level) + (0.08 * level * press))
+        force = max(1, min(255, round(255 * strength * (0.10 + 0.90 * intensity))))
+
+        # Moving the feedback start point through only a few firmware zones
+        # gives a perceptible "bite" change without constantly rebuilding a
+        # hard wall under the player's finger.
+        start_position = round(92 - 34 * min(1.0, pressure_curve + 0.25 * level))
+        return AdaptiveTriggerEffect(
+            mode="resistance",
+            start_position=max(48, min(96, start_position)),
+            force=force,
+        )

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ds5forge"
-version = "0.4.0-rc.8"
+version = "0.4.0-rc.9"
 description = "Wired DualSense companion with a local core authority"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
@@ -16,6 +16,7 @@ dependencies = [
   "pydantic>=2.7,<3",
   "pydualsense>=0.7.5,<0.8; sys_platform == 'win32'",
   "PyAudioWPatch>=0.2.12.8,<0.3; sys_platform == 'win32'",
+  "proc-tap==1.1.1; sys_platform == 'win32'",
   "customtkinter; sys_platform == 'win32'",
 ]
 

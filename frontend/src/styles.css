@@ -1286,6 +1286,43 @@ h3 {
 .lab-data-list {
   margin-top: 12px;
 }
+.drift-test-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+}
+.drift-test-panel p {
+  margin: 5px 0 0;
+}
+.drift-result-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+.drift-result {
+  display: grid;
+  gap: 7px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  font-size: 12px;
+}
+.drift-result span {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+}
+.drift-result b {
+  color: var(--text);
+}
 .lab-editor {
   display: grid;
   gap: 14px;
@@ -1436,8 +1473,13 @@ h3 {
     grid-template-columns: 1fr;
   }
   .input-visualizer,
-  .stick-grid {
+  .stick-grid,
+  .drift-result-grid {
     grid-template-columns: 1fr;
+  }
+  .drift-test-panel {
+    align-items: stretch;
+    flex-direction: column;
   }
   .button-state-grid {
     grid-template-columns: repeat(2, minmax(90px, 1fr));

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -18,6 +19,13 @@ LOGGER = get_logger(__name__)
 class LifecycleNotification:
     state: ConnectionState
     error: DS5ForgeError | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PhysicalOutputPassthroughCapability:
+    available: bool
+    verified: bool
+    reason: str | None = None
 
 
 class ControllerService:
@@ -39,6 +47,7 @@ class ControllerService:
         min_backoff: float = 0.25,
         max_backoff: float = 4.0,
         poll_interval: float = 1.0 / 250.0,
+        stable_connection_seconds: float = 2.0,
     ) -> None:
         self.factory = factory
         self.on_lifecycle = on_lifecycle
@@ -49,6 +58,7 @@ class ControllerService:
         self.min_backoff = max(0.01, min_backoff)
         self.max_backoff = max(self.min_backoff, max_backoff)
         self.poll_interval = max(0.001, poll_interval)
+        self.stable_connection_seconds = max(0.0, stable_connection_seconds)
         self.stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._adapter: ControllerAdapter | None = None
@@ -114,6 +124,77 @@ class ControllerService:
             self._neutralize(adapter)
         if self.on_motors:
             self.on_motors(0, 0)
+
+    def begin_native_game_output_passthrough(self) -> bool:
+        adapter = self.adapter
+        if adapter is None:
+            return False
+        begin = getattr(adapter, "begin_native_game_output_passthrough", None)
+        if not callable(begin):
+            return False
+        begin()
+        return True
+
+    def end_native_game_output_passthrough(self) -> bool:
+        adapter = self.adapter
+        if adapter is None:
+            return False
+        end = getattr(adapter, "end_native_game_output_passthrough", None)
+        if not callable(end):
+            return False
+        end()
+        return True
+
+    def capability(self) -> PhysicalOutputPassthroughCapability:
+        adapter = self.adapter
+        if adapter is None:
+            return PhysicalOutputPassthroughCapability(
+                available=False,
+                verified=False,
+                reason="A connected USB DualSense is required for Exclusive output passthrough.",
+            )
+        probe = getattr(adapter, "exclusive_output_passthrough_available", None)
+        available = bool(probe()) if callable(probe) else False
+        return PhysicalOutputPassthroughCapability(
+            available=available,
+            verified=available,
+            reason=None if available else "The connected adapter does not expose verified raw DualSense output passthrough.",
+        )
+
+    def begin(self, *, token: str, generation: int) -> None:
+        del token, generation
+        adapter = self.adapter
+        if adapter is None:
+            raise ControllerUnavailableError()
+        begin = getattr(adapter, "begin_exclusive_output_passthrough", None)
+        if not callable(begin):
+            raise CapabilityUnavailableError(
+                "exclusive_output_passthrough",
+                "The connected adapter cannot enter Exclusive output passthrough.",
+            )
+        begin()
+
+    def submit(self, report: bytes, *, token: str, generation: int) -> None:
+        del token, generation
+        adapter = self.adapter
+        if adapter is None:
+            raise ControllerUnavailableError()
+        submit = getattr(adapter, "write_exclusive_output_report", None)
+        if not callable(submit):
+            raise CapabilityUnavailableError(
+                "exclusive_output_passthrough",
+                "The connected adapter cannot forward Exclusive output reports.",
+            )
+        submit(bytes(report))
+
+    def end(self, *, token: str, generation: int) -> None:
+        del token, generation
+        adapter = self.adapter
+        if adapter is None:
+            return
+        end = getattr(adapter, "end_exclusive_output_passthrough", None)
+        if callable(end):
+            end()
 
     def neutralize_motors(self) -> None:
         """Stop rumble without touching adaptive-trigger output.
@@ -313,7 +394,7 @@ class ControllerService:
                 backoff = min(self.max_backoff, backoff * 2)
                 continue
 
-            backoff = self.min_backoff
+            connected_at = time.monotonic()
             with self._adapter_lock:
                 self._adapter = adapter
             # Preserve the upstream ordering: startup feedback runs before
@@ -410,7 +491,18 @@ class ControllerService:
             if self.stop_event.is_set():
                 break
             if lost:
+                connected_for = max(0.0, time.monotonic() - connected_at)
+                if connected_for >= self.stable_connection_seconds:
+                    backoff = self.min_backoff
                 self._transition(ConnectionState.RECONNECTING)
+                LOGGER.warning(
+                    "controller link lost; reconnect scheduled",
+                    extra={
+                        "event": "controller.reconnect_scheduled",
+                        "connected_for_seconds": round(connected_for, 3),
+                        "backoff_seconds": round(backoff, 3),
+                    },
+                )
                 self._wait(backoff)
                 backoff = min(self.max_backoff, backoff * 2)
 

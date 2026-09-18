@@ -93,12 +93,17 @@ class GameDefinition:
     profile: str = "Default"
     compatibility_mode: CompatibilityMode = CompatibilityMode.NATIVE
     adaptive_trigger_mode: AdaptiveTriggerMode = AdaptiveTriggerMode.NATIVE
+    adaptive_trigger_strength: int = 45
     enabled: bool = True
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "executables", tuple(str(value) for value in self.executables))
         if not isinstance(self.adaptive_trigger_mode, AdaptiveTriggerMode):
             object.__setattr__(self, "adaptive_trigger_mode", AdaptiveTriggerMode(self.adaptive_trigger_mode))
+        strength = int(self.adaptive_trigger_strength)
+        if not 10 <= strength <= 100:
+            raise ValueError("adaptive_trigger_strength must be between 10 and 100")
+        object.__setattr__(self, "adaptive_trigger_strength", strength)
 
     def matches(self, foreground: ForegroundApplication) -> GameMatch:
         if not self.enabled:

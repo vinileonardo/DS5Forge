@@ -45,6 +45,8 @@ class HapticsService(threading.Thread):
         self.clock = clock
         self.stop_event = threading.Event()
         self._capture_lock = threading.RLock()
+        self._motor_lock = threading.RLock()
+        self._output_paused = threading.Event()
         self._active_capture: AudioCapture | None = None
         self.last_left = -1
         self.last_right = -1
@@ -62,11 +64,31 @@ class HapticsService(threading.Thread):
                 capture.close()
             except Exception:
                 LOGGER.debug("active audio capture close during stop failed", exc_info=True)
-        self._set_motors(0, 0)
+        self._set_motors(0, 0, force=True)
         if self.is_alive() and threading.current_thread() is not self:
             self.join(timeout=join_timeout)
         if self.is_alive():
             LOGGER.error("haptics service did not stop before timeout", extra={"event": "audio.stop_timeout"})
+
+    @property
+    def output_paused(self) -> bool:
+        return self._output_paused.is_set()
+
+    def pause_output(self) -> None:
+        """Yield motor ownership without tearing down the WASAPI capture."""
+
+        with self._motor_lock:
+            self._output_paused.set()
+            self._set_motors(0, 0, force=True)
+        self._report_envelope(0.0)
+
+    def resume_output(self) -> None:
+        with self._motor_lock:
+            self._output_paused.clear()
+            # Force the next audio sample to be applied even if it maps to the
+            # same values that were active before the temporary pause.
+            self.last_left = -1
+            self.last_right = -1
 
     def run(self) -> None:
         if self.capture_factory is None:
@@ -78,7 +100,23 @@ class HapticsService(threading.Thread):
             if self.on_audio:
                 self.on_audio("error", None, error.message)
             return
+        waiting_reported = False
         while not self.stop_event.is_set():
+            ready_getter = getattr(self.capture_factory, "is_ready", None)
+            if callable(ready_getter) and not bool(ready_getter()):
+                self._set_motors(0, 0)
+                self._report_envelope(0.0)
+                if self.on_audio and not waiting_reported:
+                    description_getter = getattr(self.capture_factory, "waiting_description", None)
+                    description = (
+                        str(description_getter()) if callable(description_getter) else "Waiting for audio source"
+                    )
+                    self.on_audio("waiting", description, None)
+                waiting_reported = True
+                self.reload_event.wait(0.25)
+                self.reload_event.clear()
+                continue
+            waiting_reported = False
             try:
                 self._run_once()
             except DS5ForgeError as exc:
@@ -130,6 +168,9 @@ class HapticsService(threading.Thread):
                         if capture.default_output_changed():
                             break
                     data = capture.read()
+                    if self._output_paused.is_set():
+                        self._report_envelope(0.0)
+                        continue
                     if not self.enabled_provider():
                         self._set_motors(0, 0)
                         self._report_envelope(0.0)
@@ -156,41 +197,44 @@ class HapticsService(threading.Thread):
                 with self._capture_lock:
                     if self._active_capture is capture:
                         self._active_capture = None
-        self._set_motors(0, 0)
+        self._set_motors(0, 0, force=True)
         self._report_envelope(0.0)
 
     def _report_envelope(self, level: float) -> None:
         if self.on_envelope is not None:
             self.on_envelope(max(0.0, min(1.0, float(level))))
 
-    def _set_motors(self, left: int, right: int) -> None:
-        left = max(0, min(255, int(left)))
-        right = max(0, min(255, int(right)))
-        if abs(left - self.last_left) < 3 and abs(right - self.last_right) < 3:
-            if not (left == 0 and right == 0 and (self.last_left or self.last_right)):
+    def _set_motors(self, left: int, right: int, *, force: bool = False) -> None:
+        with self._motor_lock:
+            if self._output_paused.is_set() and not force:
                 return
-        try:
-            applied = self.motor_output(left, right)
-            if applied is False:
-                raise DS5ForgeError(
-                    ErrorCode.CONTROLLER_OUTPUT_FAILED,
-                    "Rumble output was not accepted by the controller.",
+            left = max(0, min(255, int(left)))
+            right = max(0, min(255, int(right)))
+            if abs(left - self.last_left) < 3 and abs(right - self.last_right) < 3:
+                if not (left == 0 and right == 0 and (self.last_left or self.last_right)):
+                    return
+            try:
+                applied = self.motor_output(left, right)
+                if applied is False:
+                    raise DS5ForgeError(
+                        ErrorCode.CONTROLLER_OUTPUT_FAILED,
+                        "Rumble output was not accepted by the controller.",
+                    )
+            except DS5ForgeError as exc:
+                LOGGER.warning(
+                    "motor output was not applied",
+                    extra={"event": "audio.motor_output", "error_code": exc.code.value},
                 )
-        except DS5ForgeError as exc:
-            LOGGER.warning(
-                "motor output was not applied",
-                extra={"event": "audio.motor_output", "error_code": exc.code.value},
-            )
-            self._report_error(exc)
-            return
-        except Exception as exc:
-            LOGGER.exception("motor output callback failed", extra={"event": "audio.motor_output"})
-            wrapped = DS5ForgeError(ErrorCode.CONTROLLER_OUTPUT_FAILED, "Rumble output failed.", detail=str(exc))
-            self._report_error(wrapped)
-            return
-        self.last_left, self.last_right = left, right
-        if self.on_motors:
-            self.on_motors(left, right)
+                self._report_error(exc)
+                return
+            except Exception as exc:
+                LOGGER.exception("motor output callback failed", extra={"event": "audio.motor_output"})
+                wrapped = DS5ForgeError(ErrorCode.CONTROLLER_OUTPUT_FAILED, "Rumble output failed.", detail=str(exc))
+                self._report_error(wrapped)
+                return
+            self.last_left, self.last_right = left, right
+            if self.on_motors:
+                self.on_motors(left, right)
 
     def _report_error(self, error: DS5ForgeError) -> None:
         if self.on_error:

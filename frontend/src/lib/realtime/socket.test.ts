@@ -97,6 +97,57 @@ describe("realtime WebSocket client", () => {
     client.close();
   });
 
+  it("accepts the live RC8 exclusive capability fields in the initial snapshot", () => {
+    const parsed = parseSocketMessage({
+      type: "state.snapshot",
+      version: 1,
+      payload: {
+        state: {
+          ...runtime,
+          exclusive: {
+            mode: "off",
+            enabled: false,
+            generation: 0,
+            ownership_acquired: false,
+            heartbeat_at: 0,
+            heartbeat_timeout_ms: 1500,
+            stale: false,
+            physical_input_visible: true,
+            virtual_input_active: false,
+            physical_suppression_active: false,
+            double_input_risk: true,
+            capability: {
+              provider_available: false,
+              provider_installed: false,
+              virtual_output_reports: false,
+              physical_output_passthrough: false,
+              physical_suppression_available: false,
+              physical_suppression_verified: false,
+              provenance: {
+                provider: "none",
+                version: null,
+                executable: null,
+                sha256: null,
+                signature_verified: false,
+                provenance_verified: false,
+                integrity_verified: false,
+                windows_validated: false,
+                evidence: [],
+              },
+              reason: "Exclusive Mode is disabled until a verified Windows provider is available.",
+            },
+            reason: null,
+            last_error: null,
+            mirrored_sequence: 0,
+            updated_at: 0,
+          },
+        },
+      },
+    });
+
+    expect(parsed).toMatchObject({ kind: "event", event: { type: "state.snapshot" } });
+  });
+
   it("parses the bounded controller input event and rejects extra payload fields", () => {
     const parsed = parseSocketMessage({
       type: "controller.input",
@@ -266,6 +317,40 @@ describe("realtime WebSocket client", () => {
     } as MessageEvent);
     expect(errors).toHaveLength(1);
     expect(errors[0]?.message).toContain("first WebSocket frame");
+    client.close();
+  });
+
+  it("keeps the first validation error when another frame races the close handshake", () => {
+    const socket = new FakeSocket();
+    const errors: ApiProtocolError[] = [];
+    const client = new RealtimeSocket({
+      url: "ws://local",
+      createWebSocket: () => socket,
+      onStatus: () => undefined,
+      onEvent: () => undefined,
+      onProtocolError: (error) => errors.push(error),
+      onReconnect: () => undefined,
+    });
+    client.connect();
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "state.snapshot",
+        version: 1,
+        payload: { state: { ...runtime, unexpected: true } },
+      }),
+    } as MessageEvent);
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: "controller.lifecycle",
+        version: 1,
+        payload: { state: "connected", error: null },
+      }),
+    } as MessageEvent);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.message).toContain("The WebSocket payload is invalid");
+    expect(errors[0]?.message).toContain("unexpected");
+    expect(errors[0]?.message).not.toContain("first WebSocket frame");
     client.close();
   });
 

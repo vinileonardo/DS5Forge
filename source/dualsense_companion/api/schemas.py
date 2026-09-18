@@ -265,6 +265,34 @@ class StickCalibrationRequest(StrictModel):
     right_center_y: Number = Field(ge=-1, le=1)
 
 
+class StickCalibrationSample(StrictModel):
+    left_x: Number = Field(ge=-1, le=1)
+    left_y: Number = Field(ge=-1, le=1)
+    right_x: Number = Field(ge=-1, le=1)
+    right_y: Number = Field(ge=-1, le=1)
+
+
+class StickCalibrationEstimateRequest(StrictModel):
+    samples: list[StickCalibrationSample] = Field(min_length=12, max_length=512)
+
+
+class StickDriftAnalysisResponse(StrictModel):
+    center_x: Number = Field(ge=-1, le=1)
+    center_y: Number = Field(ge=-1, le=1)
+    drift_radius: Number = Field(ge=0, le=2)
+    jitter_radius: Number = Field(ge=0, le=2)
+    recommended_deadzone: Number = Field(ge=0, le=1)
+    samples_used: StrictInt = Field(ge=0, le=512)
+    rejected_samples: StrictInt = Field(ge=0, le=512)
+
+
+class StickCalibrationEstimateResponse(StrictModel):
+    samples: StrictInt = Field(ge=0, le=512)
+    left: StickDriftAnalysisResponse
+    right: StickDriftAnalysisResponse
+    recommended_calibration: StickCalibrationResponse
+
+
 class GestureConfigResponse(StrictModel):
     enabled: StrictBool
     two_finger_scroll: StrictBool
@@ -306,6 +334,7 @@ class GameDefinitionRequest(StrictModel):
     profile: StrictStr = "Default"
     compatibility_mode: Literal["native", "remap", "virtual"] = "native"
     adaptive_trigger_mode: Literal["native", "reactive", "off"] = "native"
+    adaptive_trigger_strength: StrictInt = Field(default=45, ge=10, le=100)
     enabled: StrictBool = True
 
 
@@ -413,6 +442,7 @@ class ExclusiveCapabilityResponse(StrictModel):
     provider_available: bool
     provider_installed: bool
     virtual_output_reports: bool
+    physical_output_passthrough: bool
     physical_suppression_available: bool
     physical_suppression_verified: bool
     provenance: ProviderProvenanceResponse

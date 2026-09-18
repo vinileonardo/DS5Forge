@@ -248,14 +248,16 @@ class FacadeControllerLabTests(unittest.TestCase):
                 self.mark_connected(facade)
                 self.mark_running(facade)
                 facade.start_haptics_test(left=50, right=40, duration_ms=5_000)
-                self.assertIsNone(facade._haptics)
+                self.assertIsNotNone(facade._haptics)
+                self.assertTrue(facade._haptics.output_paused)
                 self.assertEqual(facade._haptics_bench.run.status, "running")
 
                 with self.assertRaises(DS5ForgeError) as raised:
                     facade.start_haptics_test(left=10, right=10, duration_ms=5_000)
                 self.assertEqual(raised.exception.code, ErrorCode.HAPTICS_TEST_BUSY)
                 self.assertEqual(facade._haptics_bench.run.status, "running")
-                self.assertIsNone(facade._haptics)
+                self.assertIsNotNone(facade._haptics)
+                self.assertTrue(facade._haptics.output_paused)
             finally:
                 facade.stop()
 
@@ -268,11 +270,13 @@ class FacadeControllerLabTests(unittest.TestCase):
                 self.mark_connected(facade)
                 self.mark_running(facade)
                 facade.start_haptics_test(left=50, right=40, duration_ms=5_000)
-                self.assertIsNone(facade._haptics)
+                self.assertIsNotNone(facade._haptics)
+                self.assertTrue(facade._haptics.output_paused)
 
                 facade.cancel_haptics_test()
 
                 self.assertIsNotNone(facade._haptics)
+                self.assertFalse(facade._haptics.output_paused)
             finally:
                 facade.stop()
 

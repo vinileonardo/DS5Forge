@@ -31,7 +31,8 @@ All paths use `/api/v1`.
 | GET/PUT/POST | `/controller/lightbar`, `/controller/lightbar/reset` | Read, apply or reset capability-gated lightbar state |
 | GET/PUT/POST/DELETE | `/controller/triggers`, `/controller/triggers/{left\|right}`, `/controller/triggers/preview`, `/controller/triggers/reset` | Configure, preview, cancel or reset adaptive triggers |
 | POST/DELETE | `/controller/haptics/test` | Start/cancel a bounded, single-flight haptics test |
-| GET/PUT | `/controller/sticks/calibration` | Save DS5Forge-only stick visualization metadata |
+| GET/PUT | `/controller/sticks/calibration` | Read/apply center offsets and radial deadzones used by DS5Forge Exclusive virtual mirroring |
+| POST | `/controller/sticks/calibration/estimate` | Analyze 12–512 stationary stick samples and return center drift, residual jitter and a bounded deadzone recommendation |
 | GET/PATCH | `/controller/gestures` | Read/update validated touch gesture settings |
 | GET/POST | `/games` | List or add strict executable-based game rules |
 | GET/PUT/DELETE | `/games/{id}` | Read, replace or remove one game rule |
@@ -56,7 +57,7 @@ Controller Lab writes are strict and capability-gated. Unsupported lightbar,
 trigger or rumble operations return a structured error and do not call the
 adapter. Trigger previews have a server-side 10–5000 ms TTL and reset both
 triggers to Off on timeout/cancel/disconnect/reconnect/shutdown. Haptics tests
-are also bounded and neutralized before audio-driven rumble resumes.
+are also bounded and neutralized before audio-driven rumble resumes. Stick calibration never rewrites native physical HID input: center correction and radial deadzone are currently applied to DS5Forge-controlled Exclusive virtual mirroring. The estimate endpoint is advisory until its returned calibration is explicitly applied.
 
 Profile documents use schema version 2 and contain `rumble`, `lightbar`,
 `triggers`, `sticks` and `touchpad` sections. Legacy rumble-only bundled/user
@@ -133,8 +134,9 @@ registry today. `virtual` is only operational when an injected
 provider reports installation, availability and reliable physical suppression;
 otherwise the request returns structured `compatibility.unavailable` and the
 previous mode remains unchanged. Conflict diagnostics are process-name
-evidence only, including the caveat that Steam Input may affect a game
-depending on its configuration. No external process is controlled.
+evidence only. Steam process presence is informational and does not imply
+Steam Input is active; it may already be disabled for the current game. No
+external process is controlled.
 
 Exclusive is a separate capability-gated mode. It requires a verified virtual
 output-report source and session-scoped physical suppression; provider presence

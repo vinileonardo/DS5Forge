@@ -36,6 +36,7 @@ import {
   RemoteSessionSchema,
   RemoteStatusSchema,
   RuntimeStateSchema,
+  StickCalibrationEstimateSchema,
   StickCalibrationSchema,
   TriggerPreviewSchema,
   TriggerStateSchema,
@@ -60,6 +61,8 @@ import {
   type RuntimeState,
   type RemoteStatus,
   type StickCalibration,
+  type StickCalibrationEstimate,
+  type StickTelemetry,
   type TriggerEffect,
   type ExclusiveStatus,
   type DuplicateInputDiagnostic,
@@ -376,6 +379,11 @@ export const api = {
   updateStickCalibration: (calibration: StickCalibration) =>
     request("/controller/sticks/calibration", StickCalibrationSchema, {
       ...jsonPut(calibration),
+      headers: { "Content-Type": "application/json" },
+    }),
+  estimateStickCalibration: (samples: StickTelemetry[]): Promise<StickCalibrationEstimate> =>
+    request("/controller/sticks/calibration/estimate", StickCalibrationEstimateSchema, {
+      ...jsonPost({ samples }),
       headers: { "Content-Type": "application/json" },
     }),
   gestures: () => request("/controller/gestures", GestureConfigSchema),

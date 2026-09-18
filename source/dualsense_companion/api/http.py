@@ -9,7 +9,14 @@ from ..core.product import ProductService
 from ..core.remote import is_loopback_host, validate_remote_origin
 from ..diagnostics.logging import get_logger
 from ..domain.errors import DS5ForgeError, ErrorCode
-from ..domain.models import AdaptiveTriggerEffect, LightbarState, PlayerLedState, StickCalibration, TriggerState
+from ..domain.models import (
+    AdaptiveTriggerEffect,
+    LightbarState,
+    PlayerLedState,
+    StickCalibration,
+    StickTelemetry,
+    TriggerState,
+)
 from .origins import DEFAULT_ALLOWED_ORIGINS, validate_allowed_origins
 from .schemas import (
     API_PREFIX,
@@ -67,6 +74,8 @@ from .schemas import (
     RumbleTestCommand,
     RumbleTestResponse,
     RuntimeStateResponse,
+    StickCalibrationEstimateRequest,
+    StickCalibrationEstimateResponse,
     StickCalibrationRequest,
     StickCalibrationResponse,
     ToggleCommand,
@@ -644,6 +653,14 @@ def create_app(
     async def update_stick_calibration(payload: StickCalibrationRequest) -> dict[str, Any]:
         facade.update_stick_calibration(StickCalibration(**payload.model_dump()))
         return facade.state_dict()["stick_calibration"]
+
+    @app.post(
+        f"{API_PREFIX}/controller/sticks/calibration/estimate",
+        response_model=StickCalibrationEstimateResponse,
+    )
+    async def estimate_stick_calibration(payload: StickCalibrationEstimateRequest) -> dict[str, Any]:
+        samples = [StickTelemetry(**sample.model_dump()) for sample in payload.samples]
+        return facade.estimate_stick_calibration(samples)
 
     @app.get(f"{API_PREFIX}/controller/gestures", response_model=GestureConfigResponse)
     async def get_gesture_config() -> dict[str, Any]:

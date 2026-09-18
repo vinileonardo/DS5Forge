@@ -240,6 +240,46 @@ async function mockControllerCore(page: Page, closeFirstSocket = false): Promise
       await route.fulfill({ json: currentState.triggers });
       return;
     }
+    if (path === "/api/v1/controller/sticks/calibration/estimate" && request.method() === "POST") {
+      await route.fulfill({
+        json: {
+          samples: Array.isArray(body.samples) ? body.samples.length : 0,
+          left: {
+            center_x: 0.04,
+            center_y: -0.03,
+            drift_radius: 0.05,
+            jitter_radius: 0.012,
+            recommended_deadzone: 0.03,
+            samples_used: 60,
+            rejected_samples: 0,
+          },
+          right: {
+            center_x: -0.02,
+            center_y: 0.01,
+            drift_radius: 0.0223606798,
+            jitter_radius: 0.008,
+            recommended_deadzone: 0.02,
+            samples_used: 60,
+            rejected_samples: 0,
+          },
+          recommended_calibration: {
+            left_deadzone: 0.03,
+            right_deadzone: 0.02,
+            left_center_x: 0.04,
+            left_center_y: -0.03,
+            right_center_x: -0.02,
+            right_center_y: 0.01,
+          },
+        },
+      });
+      return;
+    }
+    if (path === "/api/v1/controller/sticks/calibration" && request.method() === "PUT") {
+      currentState = { ...currentState, stick_calibration: body };
+      send({ kind: "sticks.calibration_changed", state: currentState.stick_calibration });
+      await route.fulfill({ json: currentState.stick_calibration });
+      return;
+    }
     if (path === "/api/v1/profiles/import") {
       await route.fulfill({
         status: 422,
@@ -353,6 +393,21 @@ test.describe("Controller Lab", () => {
 
     await expect(page.getByText("Controller state is stale", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Preview", exact: true })).toBeDisabled();
+  });
+
+  test("measures drift and applies the recommended stick correction", async ({ page }) => {
+    await mockControllerCore(page);
+    await page.goto("/controller");
+    await page.getByRole("tab", { name: "Sticks" }).click();
+
+    await page.getByRole("button", { name: "Test drift for 3s" }).click();
+    await expect(page.getByText("5.0%", { exact: true })).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText("2.2%", { exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "Apply recommended correction" }).click();
+    await expect(page.getByText("Recommended drift correction applied.", { exact: true })).toBeVisible();
+    await expect(page.getByText("Left deadzone · 3.0%", { exact: true })).toBeVisible();
+    await expect(page.getByText("Right deadzone · 2.0%", { exact: true })).toBeVisible();
   });
 
   test("saves a full profile and leaves active state unchanged after rejected import", async ({ page }) => {

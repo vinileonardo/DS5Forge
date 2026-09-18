@@ -148,6 +148,7 @@ const exclusiveCapability = {
   provider_available: false,
   provider_installed: false,
   virtual_output_reports: false,
+  physical_output_passthrough: false,
   physical_suppression_available: false,
   physical_suppression_verified: false,
   provenance: {

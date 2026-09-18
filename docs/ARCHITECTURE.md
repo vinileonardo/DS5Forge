@@ -46,8 +46,10 @@ separately with `python source/run.py --headless`.
 P5 keeps the same authority boundary. The fixed Tauri sidecar is a desktop
 process supervisor and native `.exe` picker only; the Python core remains the
 sole owner of `pydualsense`, WASAPI, Windows HID and synthetic output state.
-Exclusive providers are capability-gated Windows adapters behind a restricted
-helper protocol. The UI never imports HIDMaestro, HidHide or a Windows API.
+Exclusive virtualization is capability-gated behind a restricted HIDMaestro
+helper protocol. Physical suppression stays in the Windows core through the same
+selected-device HidHide authority used by Remap. The UI never imports HIDMaestro,
+HidHide or a Windows API.
 
 ## Boundaries
 
@@ -64,10 +66,12 @@ helper protocol. The UI never imports HIDMaestro, HidHide or a Windows API.
   the Windows composition root that injects those adapters into `CoreFacade`;
   the core never imports a platform implementation. Imports are lazy so Linux/CI can run
   domain and core tests without hardware.
-- `platform/windows/exclusive_provider.py` is a fixed helper boundary. It does
-  not install a provider, download an executable, invoke `pythonnet` or run an
-  arbitrary shell command. Provenance, signature, hash and Windows validation
-  are explicit capability inputs.
+- `platform/windows/exclusive_provider.py` is a fixed HIDMaestro helper boundary.
+  It does not silently install a provider, invoke `pythonnet` or run an arbitrary
+  shell command. Provenance, signature, hash and Windows validation are explicit
+  capability inputs. `platform/windows/hidhide.py` remains the sole physical
+  suppression authority and resolves the selected HID path when multiple
+  DualSense devices are present.
 - `api/` is a presentation adapter. The default server bind is `127.0.0.1`;
   browser HTTP requests with an explicit unapproved `Origin` are rejected
   before reaching the facade, CORS is limited to the same Vite/Tauri
@@ -85,12 +89,16 @@ helper protocol. The UI never imports HIDMaestro, HidHide or a Windows API.
   production adapter exists. Chord candidates delay simple mappings until all
   overlapping chord windows expire, completed chords win, and every teardown
   path attempts release across all adapters.
-- `ExclusiveCoordinator` owns virtual output/suppression ordering, ownership
-  token, generation, heartbeat and stale recovery. A successful mirror refreshes
-  the core lease; a bounded monitor thread sends the provider heartbeat at a
-  throttled rate and expires the session when the lease goes stale, independent
-  of the controller read callback. Virtualization or physical suppression
-  failure rolls back the whole transaction; missing suppression keeps
+- `ExclusiveCoordinator` owns virtual output/passthrough/suppression ordering,
+  ownership token, generation, heartbeat and stale recovery. A successful mirror
+  refreshes the core lease; a bounded monitor thread sends the provider heartbeat
+  at a throttled rate and expires the session when the lease goes stale,
+  independent of the controller read callback. The virtual provider returns
+  game-authored USB DualSense output reports, while `ControllerService` forwards
+  verified report `0x02` packets to the selected physical controller. During
+  that session the Windows adapter suppresses pydualsense-generated competing
+  writes. Virtualization, feedback passthrough or physical suppression failure
+  rolls back the whole transaction; missing suppression keeps
   `double_input_risk=true`. Exclusive refuses to coexist with Remap/Virtual and
   a mode change disables it first.
 - `AdaptiveTriggerEngine` is separate from Controller Lab previews. It
@@ -98,8 +106,9 @@ helper protocol. The UI never imports HIDMaestro, HidHide or a Windows API.
   reset/watchdog ownership. Reactive effects are labeled generated effects and
   are only produced when a game explicitly selects `reactive`; `native` is the
   default and `off` neutralizes DS5Forge output. `game_native` is reserved for
-  real virtual-provider output-report feedback, which is not implemented in this
-  source, so no invented telemetry is injected at that priority.
+  real virtual-provider output-report feedback. The core forwarding path is now
+  implemented, but the HIDMaestro helper remains capability-gated until its
+  Windows build/install and hardware validation are complete.
 
 ## Lifecycle and teardown
 
@@ -143,8 +152,10 @@ P3 game/automation data is deliberately not merged into schema-v1 `config.json`.
 It lives in schema-v2 `games.json`, which supports one-or-more executable
 identities per game and migrates the unreleased P3 schema-v1 shape. The default
 exit policy is `restore_previous`; Native is the default mode and
-Virtual requires a provider with physical suppression. In this sprint no
-production virtual provider, driver or installer is present.
+Virtual requires a provider with physical suppression. The HIDMaestro helper
+source/build pipeline is present, but it remains unavailable at runtime until the
+pinned helper is built, the provider is explicitly installed and Windows/hardware
+validation passes.
 
 ## P2/P3/P5 safety boundaries
 
@@ -177,11 +188,12 @@ modeled but unavailable in production because no approved provider with safe
 physical suppression is installed. Windows and physical DualSense USB proof
 remain `HARDWARE VALIDATION PENDING`.
 
-P5 does not add Bluetooth, wireless pairing, dongles, ViGEmBus or provider
-installation. HIDMaestro + HidHide is an investigated integration design, not
-an enabled runtime capability. Exclusive starts OFF and remains unavailable
-until provenance, integrity, signature, output reports, session suppression and
-Windows validation are all proven. See
+P5 does not add Bluetooth, wireless pairing, dongles or ViGEmBus. HIDMaestro
+virtualization plus core-owned HidHide suppression is implemented behind strict
+gates, but provider installation is still explicit rather than automatic.
+Exclusive starts OFF and remains unavailable until provenance, integrity,
+signature, virtual output reports, physical feedback passthrough, selected-device
+suppression and Windows validation are all proven. See
 [`ADR_P5_EXCLUSIVE_INPUT_PROVIDER.md`](ADR_P5_EXCLUSIVE_INPUT_PROVIDER.md).
 
 ## P4 productization boundary

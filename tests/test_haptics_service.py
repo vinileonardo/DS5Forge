@@ -167,6 +167,37 @@ class HapticsServiceTests(unittest.TestCase):
         self.assertGreaterEqual(capture.close_calls, 1)
         self.assertEqual(errors, [])
 
+    def test_targeted_capture_waits_without_falling_back_to_system_audio(self):
+        waiting = threading.Event()
+        audio = []
+
+        class Factory:
+            def is_ready(self):
+                return False
+
+            def waiting_description(self):
+                return "Waiting for active game process"
+
+            def open(self):
+                raise AssertionError("capture must not open without a selected game PID")
+
+        service = HapticsService(
+            lambda _left, _right: True,
+            lambda: default_config()["rumble"],
+            lambda: True,
+            capture_factory=Factory(),
+            on_audio=lambda status, device, error: (
+                audio.append((status, device, error)),
+                waiting.set() if status == "waiting" else None,
+            ),
+        )
+        service.start()
+        self.assertTrue(waiting.wait(1.0))
+        service.stop(join_timeout=1.0)
+
+        self.assertEqual(audio[0], ("waiting", "Waiting for active game process", None))
+        self.assertEqual(audio[-1], ("stopped", None, None))
+
     def test_missing_capture_adapter_reports_audio_error(self):
         errors = []
         audio = []

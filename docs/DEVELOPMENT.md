@@ -11,7 +11,7 @@ mypy source/dualsense_companion
 pytest
 python -m compileall -q source tests
 python -m build --wheel
-python scripts/validate_versions.py --expected 0.4.0-rc.8
+python scripts/validate_versions.py --expected 0.4.0-rc.9
 ```
 
 Headless core/API and the retained GUI are separate entry modes:

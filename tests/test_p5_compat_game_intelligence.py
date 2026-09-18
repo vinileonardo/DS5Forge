@@ -20,6 +20,7 @@ from dualsense_companion.core.config import ConfigRepository, default_config
 from dualsense_companion.core.exclusive_input import (
     ExclusiveCoordinator,
     FakeExclusiveVirtualProvider,
+    FakePhysicalOutputReportSink,
     FakePhysicalSuppressionProvider,
 )
 from dualsense_companion.core.facade import CoreFacade
@@ -83,22 +84,31 @@ def test_exclusive_transaction_mirrors_and_rolls_back_on_suppression_failure():
     clock = ManualClock()
     virtual = FakeExclusiveVirtualProvider()
     suppression = FakePhysicalSuppressionProvider()
-    coordinator = ExclusiveCoordinator(virtual, suppression, clock=clock)
+    output = FakePhysicalOutputReportSink()
+    coordinator = ExclusiveCoordinator(virtual, suppression, physical_output_sink=output, clock=clock)
 
     active = coordinator.enable()
     assert active.enabled is True
     assert active.double_input_risk is False
+    game_output = bytes([0x02] + [0x44] * 63)
+    virtual.queue_output_report(game_output)
     mirrored = coordinator.mirror_reading(
         ControllerReading(connected=True, input=ControllerInput(cross=True), battery=BatterySnapshot(level=75))
     )
     assert mirrored.mirrored_sequence == 1
     assert virtual.states[-1]["input"]["cross"] is True
+    assert output.reports == [game_output]
     assert coordinator.heartbeat().stale is False
     assert coordinator.disable(reason="test").enabled is False
 
     failing_virtual = FakeExclusiveVirtualProvider()
     failing_suppression = FakePhysicalSuppressionProvider(fail_enable=True)
-    failing = ExclusiveCoordinator(failing_virtual, failing_suppression, clock=clock)
+    failing = ExclusiveCoordinator(
+        failing_virtual,
+        failing_suppression,
+        physical_output_sink=FakePhysicalOutputReportSink(),
+        clock=clock,
+    )
     with pytest.raises(DS5ForgeError) as raised:
         failing.enable()
     assert raised.value.code is ErrorCode.EXCLUSIVE_ROLLBACK
@@ -112,6 +122,7 @@ def test_exclusive_watchdog_recovers_stale_session():
     coordinator = ExclusiveCoordinator(
         FakeExclusiveVirtualProvider(),
         FakePhysicalSuppressionProvider(),
+        physical_output_sink=FakePhysicalOutputReportSink(),
         heartbeat_timeout=0.25,
         clock=clock,
     )
@@ -128,6 +139,7 @@ def test_public_exclusive_heartbeat_cannot_extend_stalled_mirror_lease():
     coordinator = ExclusiveCoordinator(
         FakeExclusiveVirtualProvider(),
         FakePhysicalSuppressionProvider(),
+        physical_output_sink=FakePhysicalOutputReportSink(),
         heartbeat_timeout=0.25,
         provider_heartbeat_interval=0.05,
         clock=clock,
@@ -163,8 +175,29 @@ def test_adaptive_trigger_arbitration_ttl_and_generated_label():
     clock = ManualClock()
     output = Output()
     engine = AdaptiveTriggerEngine(output, output_supported=True, ttl_seconds=1.0, clock=clock)
-    reactive = ReactiveTriggerAdapter().from_envelope(input_state=ControllerInput(l2=1.0), audio_envelope=0.0)
+    reactive = ReactiveTriggerAdapter().from_envelope(
+        input_state=ControllerInput(l2=1.0),
+        audio_envelope=0.0,
+        now=0.0,
+    )
     assert reactive is not None
+    assert reactive.left.mode == "pulse"
+    assert reactive.left.force == 115
+    assert reactive.right.is_off
+    full_strength = ReactiveTriggerAdapter().from_envelope(
+        input_state=ControllerInput(l2=1.0),
+        audio_envelope=0.0,
+        strength_percent=100,
+    )
+    assert full_strength is not None
+    assert full_strength.left.force == 255
+    low_strength = ReactiveTriggerAdapter().from_envelope(
+        input_state=ControllerInput(l2=1.0),
+        audio_envelope=0.0,
+        strength_percent=10,
+    )
+    assert low_strength is not None
+    assert low_strength.left.force == 26
     engine.set_reactive(reactive)
     assert engine.status.source is TriggerSource.REACTIVE
     engine.set_telemetry(FakeTelemetryAdapter().trigger_state({"impact": 1.0}, now=clock()) or TriggerState())
@@ -180,6 +213,59 @@ def test_adaptive_trigger_arbitration_ttl_and_generated_label():
     assert engine.tick().source is TriggerSource.OFF
     assert output.resets >= 1
     assert engine.status.generated_effect is False
+
+
+def test_reactive_trigger_adapter_varies_per_side_and_effect_type():
+    adapter = ReactiveTriggerAdapter()
+
+    initial = adapter.from_envelope(
+        input_state=ControllerInput(l2=0.7, r2=0.0),
+        audio_envelope=0.0,
+        strength_percent=45,
+        now=0.0,
+    )
+    assert initial is not None
+    assert initial.left.mode == "pulse"
+    assert initial.right.is_off
+
+    settled = adapter.from_envelope(
+        input_state=ControllerInput(l2=0.7, r2=0.0),
+        audio_envelope=0.0,
+        strength_percent=45,
+        now=0.20,
+    )
+    assert settled is not None
+    assert settled.left.mode == "resistance"
+    assert 48 <= settled.left.start_position <= 96
+    assert settled.right.is_off
+
+    split = adapter.from_envelope(
+        input_state=ControllerInput(l2=0.35, r2=0.8),
+        audio_envelope=0.05,
+        strength_percent=45,
+        now=0.25,
+    )
+    assert split is not None
+    assert split.left.mode == "resistance"
+    assert split.right.mode == "pulse"
+
+    audio_hit = adapter.from_envelope(
+        input_state=ControllerInput(l2=0.35, r2=0.8),
+        audio_envelope=0.55,
+        strength_percent=45,
+        now=0.40,
+    )
+    assert audio_hit is not None
+    assert audio_hit.left.mode == "pulse"
+    assert audio_hit.right.mode == "pulse"
+
+    released = adapter.from_envelope(
+        input_state=ControllerInput(),
+        audio_envelope=1.0,
+        strength_percent=45,
+        now=0.60,
+    )
+    assert released is None
 
 
 def test_calibration_rejects_outlier_and_native_keeps_raw_stick_values():
@@ -278,10 +364,11 @@ def _make_facade(root: Path, **kwargs) -> CoreFacade:
     )
 
 
-def _operational_exclusive(virtual=None, suppression=None) -> ExclusiveCoordinator:
+def _operational_exclusive(virtual=None, suppression=None, output=None) -> ExclusiveCoordinator:
     return ExclusiveCoordinator(
         virtual or FakeExclusiveVirtualProvider(),
         suppression or FakePhysicalSuppressionProvider(),
+        physical_output_sink=output or FakePhysicalOutputReportSink(),
         heartbeat_timeout=0.25,
     )
 
@@ -293,6 +380,7 @@ def test_exclusive_mirror_refreshes_lease_and_provider_heartbeat_is_throttled():
     coordinator = ExclusiveCoordinator(
         virtual,
         suppression,
+        physical_output_sink=FakePhysicalOutputReportSink(),
         heartbeat_timeout=1.0,
         provider_heartbeat_interval=0.5,
         clock=clock,
@@ -321,6 +409,7 @@ def test_exclusive_tick_expires_stalled_session_with_neutral_cleanup():
     coordinator = ExclusiveCoordinator(
         virtual,
         suppression,
+        physical_output_sink=FakePhysicalOutputReportSink(),
         heartbeat_timeout=0.25,
         provider_heartbeat_interval=0.2,
         clock=clock,
@@ -483,7 +572,12 @@ def test_facade_exclusive_provider_failure_rolls_back_and_stays_safe():
         suppression = FakePhysicalSuppressionProvider(fail_enable=True)
         facade = _make_facade(
             Path(temp),
-            exclusive_coordinator=ExclusiveCoordinator(virtual, suppression, heartbeat_timeout=0.25),
+            exclusive_coordinator=ExclusiveCoordinator(
+                virtual,
+                suppression,
+                physical_output_sink=FakePhysicalOutputReportSink(),
+                heartbeat_timeout=0.25,
+            ),
         )
         try:
             with pytest.raises(DS5ForgeError) as raised:
@@ -500,7 +594,10 @@ def test_facade_exclusive_provider_failure_rolls_back_and_stays_safe():
         facade = _make_facade(
             Path(temp),
             exclusive_coordinator=ExclusiveCoordinator(
-                failing_virtual, FakePhysicalSuppressionProvider(), heartbeat_timeout=0.25
+                failing_virtual,
+                FakePhysicalSuppressionProvider(),
+                physical_output_sink=FakePhysicalOutputReportSink(),
+                heartbeat_timeout=0.25,
             ),
         )
         try:
@@ -528,8 +625,10 @@ def test_legacy_game_registry_defaults_adaptive_trigger_mode_without_data_loss()
     ]
     normalized = validate_games_config(document)
     assert normalized["games"][0]["adaptive_trigger_mode"] == "native"
+    assert normalized["games"][0]["adaptive_trigger_strength"] == 45
     definitions = game_definitions(normalized)
     assert definitions[0].adaptive_trigger_mode.value == "native"
+    assert definitions[0].adaptive_trigger_strength == 45
     assert definitions[0].executables == ("legacy.exe",)
 
 
@@ -756,6 +855,42 @@ def test_facade_reactive_mode_is_explicit_generated_and_resets_on_exit_and_ttl()
             assert "adaptive_trigger.changed" in events
         finally:
             facade.unsubscribe(subscription)
+            facade.stop()
+
+
+def test_reconnect_restores_active_reactive_game_mode():
+    with tempfile.TemporaryDirectory() as temp:
+        facade = _make_facade(Path(temp))
+        adapter = _ConnectedTriggerAdapter()
+        with facade.controller._adapter_lock:
+            facade.controller._adapter = adapter
+        try:
+            game = GameDefinition(
+                id="reactive-game",
+                name="Reactive",
+                executables=("reactive.exe",),
+                adaptive_trigger_mode="reactive",
+            ).to_dict()
+            facade.add_game(game)
+            facade.update_automation({"enabled": True})
+            facade._on_foreground_observation(
+                ForegroundApplication(
+                    available=True,
+                    pid=91,
+                    executable_name="reactive.exe",
+                    executable_path="C:\\Games\\reactive.exe",
+                    process_alive=True,
+                ),
+                True,
+            )
+            assert facade.snapshot().automation.active_game_id == "reactive-game"
+            assert facade._adaptive_trigger_mode == "reactive"
+
+            facade._on_connected(adapter)
+
+            assert facade._adaptive_trigger_mode == "reactive"
+            assert facade._native_game_output_passthrough_active is False
+        finally:
             facade.stop()
 
 
